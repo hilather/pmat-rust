@@ -155,8 +155,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          cd "${GITHUB_WORKSPACE}"
           TAG="${GITHUB_REF_NAME}"
           # gh may be missing in the Rocky container — install official binary
           if ! command -v gh >/dev/null 2>&1; then
@@ -166,10 +168,12 @@ jobs:
           fi
           # Ensure release exists (created by earlier publish or create now)
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --notes "Automated Rocky 8 hybrid build."
+            gh release create "$TAG" --title "$TAG" --notes "Automated Rocky 8 hybrid build." \
+              --repo "$GH_REPO"
           fi
-          gh release upload "$TAG" dist/rpm/*.rpm dist/rpm/libpmat_core.so --clobber
-          gh release view "$TAG"
+          gh release upload "$TAG" dist/rpm/*.rpm dist/rpm/libpmat_core.so --clobber \
+            --repo "$GH_REPO"
+          gh release view "$TAG" --repo "$GH_REPO"
 
       - name: Upload failure logs
         if: failure()
