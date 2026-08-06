@@ -41,6 +41,73 @@ extern uint64_t pmat_reverse_edge_count(const pmat_dump *dump);
 extern const char *pmat_last_error(void);
 extern const char *pmat_core_version(void);
 
+/* ---- Payload accessors (declared) ---- */
+extern uint32_t pmat_stack_count(const pmat_dump *dump);
+extern int pmat_stack_at(const pmat_dump *dump, uint32_t index, uint64_t *addr_out);
+extern uint32_t pmat_mortal_count(const pmat_dump *dump);
+extern int pmat_mortal_at(const pmat_dump *dump, uint32_t index, uint64_t *addr_out);
+extern uint32_t pmat_obj_header_len(const pmat_dump *dump, uint32_t id);
+extern int pmat_obj_header_copy(const pmat_dump *dump, uint32_t id, uint8_t *buf, size_t buflen);
+extern uint32_t pmat_obj_n_ptrs(const pmat_dump *dump, uint32_t id);
+extern uint64_t pmat_obj_ptr_at(const pmat_dump *dump, uint32_t id, uint32_t index);
+extern uint32_t pmat_obj_n_strs(const pmat_dump *dump, uint32_t id);
+extern uint32_t pmat_obj_str_len(const pmat_dump *dump, uint32_t id, uint32_t index);
+extern int pmat_obj_str_copy(const pmat_dump *dump, uint32_t id, uint32_t index, uint8_t *buf, size_t buflen);
+extern uint8_t pmat_obj_array_flags(const pmat_dump *dump, uint32_t id);
+extern uint32_t pmat_obj_n_elems(const pmat_dump *dump, uint32_t id);
+extern uint64_t pmat_obj_elem_at(const pmat_dump *dump, uint32_t id, uint32_t index);
+extern uint32_t pmat_obj_n_hash(const pmat_dump *dump, uint32_t id);
+extern uint32_t pmat_obj_hash_key_len(const pmat_dump *dump, uint32_t id, uint32_t index);
+extern int pmat_obj_hash_key_copy(const pmat_dump *dump, uint32_t id, uint32_t index, uint8_t *buf, size_t buflen);
+extern uint64_t pmat_obj_hash_hek(const pmat_dump *dump, uint32_t id, uint32_t index);
+extern uint64_t pmat_obj_hash_val(const pmat_dump *dump, uint32_t id, uint32_t index);
+extern uint64_t pmat_obj_code_padnames_at(const pmat_dump *dump, uint32_t id);
+extern uint32_t pmat_obj_n_code_consts(const pmat_dump *dump, uint32_t id);
+extern uint64_t pmat_obj_code_const_at(const pmat_dump *dump, uint32_t id, uint32_t index);
+extern uint32_t pmat_obj_n_code_gvs(const pmat_dump *dump, uint32_t id);
+extern uint64_t pmat_obj_code_gv_at(const pmat_dump *dump, uint32_t id, uint32_t index);
+extern uint32_t pmat_obj_n_code_pads(const pmat_dump *dump, uint32_t id);
+extern int pmat_obj_code_pad_at(const pmat_dump *dump, uint32_t id, uint32_t index, uint32_t *depth_out, uint64_t *addr_out);
+extern uint32_t pmat_obj_n_code_padnames(const pmat_dump *dump, uint32_t id);
+extern int pmat_obj_code_padname_at(const pmat_dump *dump, uint32_t id, uint32_t index,
+  uint32_t *padix_out, uint16_t *flags_out, uint64_t *ourstash_out, uint64_t *fieldix_out,
+  uint64_t *fieldstash_out, uint8_t *name_buf, size_t name_buflen, uint32_t *name_len_out);
+extern uint32_t pmat_obj_n_magic(const pmat_dump *dump, uint32_t id);
+extern int pmat_obj_magic_at(const pmat_dump *dump, uint32_t id, uint32_t index,
+  uint8_t *type_out, uint8_t *flags_out, uint64_t *obj_out, uint64_t *ptr_out, uint64_t *vtbl_out);
+extern uint32_t pmat_obj_stash_name_len(const pmat_dump *dump, uint32_t id);
+extern int pmat_obj_stash_name_copy(const pmat_dump *dump, uint32_t id, uint8_t *buf, size_t buflen);
+extern uint32_t pmat_obj_n_mro(const pmat_dump *dump, uint32_t id);
+extern uint64_t pmat_obj_mro_at(const pmat_dump *dump, uint32_t id, uint32_t index);
+extern uint32_t pmat_obj_n_annotations(const pmat_dump *dump, uint32_t id);
+extern int pmat_obj_annotation_at(const pmat_dump *dump, uint32_t id, uint32_t index,
+  uint64_t *addr_out, uint8_t *name_buf, size_t name_buflen, uint32_t *name_len_out);
+extern uint32_t pmat_obj_n_saved(const pmat_dump *dump, uint32_t id);
+extern int pmat_obj_saved_at(const pmat_dump *dump, uint32_t id, uint32_t index,
+  uint8_t *kind_out, uint64_t *idx_out, uint64_t *addr_out);
+extern uint32_t pmat_obj_n_code_constix(const pmat_dump *dump, uint32_t id);
+extern uint64_t pmat_obj_code_constix_at(const pmat_dump *dump, uint32_t id, uint32_t index);
+extern uint32_t pmat_obj_n_code_gvix(const pmat_dump *dump, uint32_t id);
+extern uint64_t pmat_obj_code_gvix_at(const pmat_dump *dump, uint32_t id, uint32_t index);
+
+extern uint32_t pmat_context_count(const pmat_dump *dump);
+extern uint8_t pmat_context_type(const pmat_dump *dump, uint32_t index);
+extern uint32_t pmat_context_common_header_len(const pmat_dump *dump, uint32_t index);
+extern int pmat_context_common_header_copy(const pmat_dump *dump, uint32_t index, uint8_t *buf, size_t buflen);
+extern uint32_t pmat_context_n_common_strs(const pmat_dump *dump, uint32_t index);
+extern uint32_t pmat_context_common_str_len(const pmat_dump *dump, uint32_t index, uint32_t sidx);
+extern int pmat_context_common_str_copy(const pmat_dump *dump, uint32_t index, uint32_t sidx, uint8_t *buf, size_t buflen);
+extern uint32_t pmat_context_n_type_ptrs(const pmat_dump *dump, uint32_t index);
+extern uint64_t pmat_context_type_ptr_at(const pmat_dump *dump, uint32_t index, uint32_t pidx);
+extern uint32_t pmat_context_type_header_len(const pmat_dump *dump, uint32_t index);
+extern int pmat_context_type_header_copy(const pmat_dump *dump, uint32_t index, uint8_t *buf, size_t buflen);
+extern uint32_t pmat_obj_n_class_fields(const pmat_dump *dump, uint32_t id);
+extern int pmat_obj_class_field_at(const pmat_dump *dump, uint32_t id, uint32_t index,
+  uint64_t *fieldix_out, uint8_t *name_buf, size_t name_buflen, uint32_t *name_len_out);
+
+
+
+
 typedef struct {
   pmat_dump *dump;
 } pmat_handle;
@@ -346,3 +413,309 @@ core_version()
     RETVAL = pmat_core_version();
   OUTPUT:
     RETVAL
+
+void
+stack(self)
+    SV *self
+  PREINIT:
+    pmat_handle *h;
+    uint32_t n, i;
+    AV *av;
+  PPCODE:
+    h = INT2PTR(pmat_handle *, SvIV((SV *)SvRV(self)));
+    n = pmat_stack_count(h->dump);
+    av = newAV();
+    for (i = 0; i < n; i++) {
+      uint64_t addr = 0;
+      if (pmat_stack_at(h->dump, i, &addr) == 0)
+        av_push(av, newSVuv((UV)addr));
+    }
+    PUSHs(sv_2mortal(newRV_noinc((SV *)av)));
+
+void
+mortals(self)
+    SV *self
+  PREINIT:
+    pmat_handle *h;
+    uint32_t n, i;
+    AV *av;
+  PPCODE:
+    h = INT2PTR(pmat_handle *, SvIV((SV *)SvRV(self)));
+    n = pmat_mortal_count(h->dump);
+    av = newAV();
+    for (i = 0; i < n; i++) {
+      uint64_t addr = 0;
+      if (pmat_mortal_at(h->dump, i, &addr) == 0)
+        av_push(av, newSVuv((UV)addr));
+    }
+    PUSHs(sv_2mortal(newRV_noinc((SV *)av)));
+
+void
+object_detail(self, id)
+    SV *self
+    UV id
+  PREINIT:
+    pmat_handle *h;
+    HV *hv;
+    AV *av;
+    uint32_t n, i;
+    uint32_t hlen;
+  PPCODE:
+    h = INT2PTR(pmat_handle *, SvIV((SV *)SvRV(self)));
+    if (id >= pmat_object_count(h->dump))
+      XSRETURN_UNDEF;
+    hv = newHV();
+    hv_stores(hv, "type", newSVuv((UV)pmat_type_for_id(h->dump, (uint32_t)id)));
+    hv_stores(hv, "addr", newSVuv((UV)pmat_addr_for_id(h->dump, (uint32_t)id)));
+    hv_stores(hv, "refcnt", newSVuv((UV)pmat_refcnt_for_id(h->dump, (uint32_t)id)));
+    hv_stores(hv, "size", newSVuv((UV)pmat_size_for_id(h->dump, (uint32_t)id)));
+    hv_stores(hv, "blessed", newSVuv((UV)pmat_blessed_for_id(h->dump, (uint32_t)id)));
+
+    hlen = pmat_obj_header_len(h->dump, (uint32_t)id);
+    if (hlen) {
+      SV *hdr = newSV(hlen);
+      SvPOK_on(hdr);
+      SvCUR_set(hdr, hlen);
+      pmat_obj_header_copy(h->dump, (uint32_t)id, (uint8_t *)SvPVX(hdr), hlen);
+      hv_stores(hv, "header", hdr);
+    } else {
+      hv_stores(hv, "header", newSVpvn("", 0));
+    }
+
+    n = pmat_obj_n_ptrs(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++)
+      av_push(av, newSVuv((UV)pmat_obj_ptr_at(h->dump, (uint32_t)id, i)));
+    hv_stores(hv, "ptrs", newRV_noinc((SV *)av));
+
+    n = pmat_obj_n_strs(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++) {
+      uint32_t sl = pmat_obj_str_len(h->dump, (uint32_t)id, i);
+      SV *s = newSV(sl ? sl : 1);
+      SvPOK_on(s);
+      SvCUR_set(s, sl);
+      if (sl)
+        pmat_obj_str_copy(h->dump, (uint32_t)id, i, (uint8_t *)SvPVX(s), sl);
+      av_push(av, s);
+    }
+    hv_stores(hv, "strs", newRV_noinc((SV *)av));
+
+    hv_stores(hv, "array_flags", newSVuv((UV)pmat_obj_array_flags(h->dump, (uint32_t)id)));
+    n = pmat_obj_n_elems(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++)
+      av_push(av, newSVuv((UV)pmat_obj_elem_at(h->dump, (uint32_t)id, i)));
+    hv_stores(hv, "elems", newRV_noinc((SV *)av));
+
+    n = pmat_obj_n_hash(h->dump, (uint32_t)id);
+    {
+      HV *hh = newHV();
+      for (i = 0; i < n; i++) {
+        uint32_t kl = pmat_obj_hash_key_len(h->dump, (uint32_t)id, i);
+        char *kbuf;
+        Newx(kbuf, kl ? kl : 1, char);
+        if (kl)
+          pmat_obj_hash_key_copy(h->dump, (uint32_t)id, i, (uint8_t *)kbuf, kl);
+        {
+          AV *row = newAV();
+          av_push(row, newSVuv((UV)pmat_obj_hash_hek(h->dump, (uint32_t)id, i)));
+          av_push(row, newSVuv((UV)pmat_obj_hash_val(h->dump, (uint32_t)id, i)));
+          hv_store(hh, kbuf, (I32)kl, newRV_noinc((SV *)row), 0);
+        }
+        Safefree(kbuf);
+      }
+      hv_stores(hv, "hash_values", newRV_noinc((SV *)hh));
+    }
+
+    hv_stores(hv, "code_padnames_at", newSVuv((UV)pmat_obj_code_padnames_at(h->dump, (uint32_t)id)));
+    n = pmat_obj_n_code_consts(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++)
+      av_push(av, newSVuv((UV)pmat_obj_code_const_at(h->dump, (uint32_t)id, i)));
+    hv_stores(hv, "code_consts", newRV_noinc((SV *)av));
+
+    n = pmat_obj_n_code_gvs(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++)
+      av_push(av, newSVuv((UV)pmat_obj_code_gv_at(h->dump, (uint32_t)id, i)));
+    hv_stores(hv, "code_gvs", newRV_noinc((SV *)av));
+
+    n = pmat_obj_n_code_pads(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++) {
+      uint32_t depth = 0;
+      uint64_t addr = 0;
+      AV *row = newAV();
+      pmat_obj_code_pad_at(h->dump, (uint32_t)id, i, &depth, &addr);
+      av_push(row, newSVuv((UV)depth));
+      av_push(row, newSVuv((UV)addr));
+      av_push(av, newRV_noinc((SV *)row));
+    }
+    hv_stores(hv, "code_pads", newRV_noinc((SV *)av));
+
+    n = pmat_obj_n_code_padnames(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++) {
+      uint32_t padix = 0, nlen = 0;
+      uint16_t flags = 0;
+      uint64_t ourstash = 0, fieldix = 0, fieldstash = 0;
+      char namebuf[4096];
+      HV *pn = newHV();
+      pmat_obj_code_padname_at(h->dump, (uint32_t)id, i, &padix, &flags, &ourstash,
+        &fieldix, &fieldstash, (uint8_t *)namebuf, sizeof(namebuf), &nlen);
+      if (nlen > sizeof(namebuf)) nlen = sizeof(namebuf);
+      hv_stores(pn, "padix", newSVuv(padix));
+      hv_stores(pn, "flags", newSVuv(flags));
+      hv_stores(pn, "ourstash", newSVuv((UV)ourstash));
+      hv_stores(pn, "fieldix", newSVuv((UV)fieldix));
+      hv_stores(pn, "fieldstash", newSVuv((UV)fieldstash));
+      hv_stores(pn, "name", newSVpvn(namebuf, nlen));
+      av_push(av, newRV_noinc((SV *)pn));
+    }
+    hv_stores(hv, "code_padnames", newRV_noinc((SV *)av));
+
+    n = pmat_obj_n_magic(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++) {
+      uint8_t t = 0, f = 0;
+      uint64_t o = 0, p = 0, v = 0;
+      AV *row = newAV();
+      pmat_obj_magic_at(h->dump, (uint32_t)id, i, &t, &f, &o, &p, &v);
+      av_push(row, newSVuv(t));
+      av_push(row, newSVuv(f));
+      av_push(row, newSVuv((UV)o));
+      av_push(row, newSVuv((UV)p));
+      av_push(row, newSVuv((UV)v));
+      av_push(av, newRV_noinc((SV *)row));
+    }
+    hv_stores(hv, "magic", newRV_noinc((SV *)av));
+
+    {
+      uint32_t sn = pmat_obj_stash_name_len(h->dump, (uint32_t)id);
+      if (sn) {
+        SV *s = newSV(sn);
+        SvPOK_on(s);
+        SvCUR_set(s, sn);
+        pmat_obj_stash_name_copy(h->dump, (uint32_t)id, (uint8_t *)SvPVX(s), sn);
+        hv_stores(hv, "stash_name", s);
+      }
+    }
+
+    n = pmat_obj_n_mro(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++)
+      av_push(av, newSVuv((UV)pmat_obj_mro_at(h->dump, (uint32_t)id, i)));
+    hv_stores(hv, "mro_ptrs", newRV_noinc((SV *)av));
+
+    n = pmat_obj_n_annotations(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++) {
+      uint64_t addr = 0;
+      uint32_t nlen = 0;
+      char namebuf[1024];
+      AV *row = newAV();
+      pmat_obj_annotation_at(h->dump, (uint32_t)id, i, &addr, (uint8_t *)namebuf, sizeof(namebuf), &nlen);
+      if (nlen > sizeof(namebuf)) nlen = sizeof(namebuf);
+      av_push(row, newSVuv((UV)addr));
+      av_push(row, newSVpvn(namebuf, nlen));
+      av_push(av, newRV_noinc((SV *)row));
+    }
+    hv_stores(hv, "annotations", newRV_noinc((SV *)av));
+
+    n = pmat_obj_n_saved(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++) {
+      uint8_t kind = 0;
+      uint64_t idx = 0, addr = 0;
+      AV *row = newAV();
+      pmat_obj_saved_at(h->dump, (uint32_t)id, i, &kind, &idx, &addr);
+      av_push(row, newSVuv(kind));
+      av_push(row, newSVuv((UV)idx));
+      av_push(row, newSVuv((UV)addr));
+      av_push(av, newRV_noinc((SV *)row));
+    }
+    hv_stores(hv, "saved", newRV_noinc((SV *)av));
+
+    n = pmat_obj_n_code_constix(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++)
+      av_push(av, newSVuv((UV)pmat_obj_code_constix_at(h->dump, (uint32_t)id, i)));
+    hv_stores(hv, "code_constix", newRV_noinc((SV *)av));
+
+    n = pmat_obj_n_code_gvix(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++)
+      av_push(av, newSVuv((UV)pmat_obj_code_gvix_at(h->dump, (uint32_t)id, i)));
+    hv_stores(hv, "code_gvix", newRV_noinc((SV *)av));
+
+    n = pmat_obj_n_class_fields(h->dump, (uint32_t)id);
+    av = newAV();
+    for (i = 0; i < n; i++) {
+      uint64_t fieldix = 0;
+      uint32_t nlen = 0;
+      char namebuf[1024];
+      AV *row = newAV();
+      pmat_obj_class_field_at(h->dump, (uint32_t)id, i, &fieldix, (uint8_t *)namebuf, sizeof(namebuf), &nlen);
+      if (nlen > sizeof(namebuf)) nlen = sizeof(namebuf);
+      av_push(row, newSVuv((UV)fieldix));
+      av_push(row, newSVpvn(namebuf, nlen));
+      av_push(av, newRV_noinc((SV *)row));
+    }
+    hv_stores(hv, "class_fields", newRV_noinc((SV *)av));
+
+    PUSHs(sv_2mortal(newRV_noinc((SV *)hv)));
+
+
+void
+contexts_raw(self)
+    SV *self
+  PREINIT:
+    pmat_handle *h;
+    uint32_t n, i, j;
+    AV *av;
+  PPCODE:
+    h = INT2PTR(pmat_handle *, SvIV((SV *)SvRV(self)));
+    n = pmat_context_count(h->dump);
+    av = newAV();
+    for (i = 0; i < n; i++) {
+      HV *ch = newHV();
+      uint32_t hlen, sn, pn, thlen;
+      AV *strs, *ptrs;
+      hv_stores(ch, "type", newSVuv((UV)pmat_context_type(h->dump, i)));
+      hlen = pmat_context_common_header_len(h->dump, i);
+      if (hlen) {
+        SV *hdr = newSV(hlen);
+        SvPOK_on(hdr); SvCUR_set(hdr, hlen);
+        pmat_context_common_header_copy(h->dump, i, (uint8_t *)SvPVX(hdr), hlen);
+        hv_stores(ch, "common_header", hdr);
+      } else {
+        hv_stores(ch, "common_header", newSVpvn("", 0));
+      }
+      sn = pmat_context_n_common_strs(h->dump, i);
+      strs = newAV();
+      for (j = 0; j < sn; j++) {
+        uint32_t sl = pmat_context_common_str_len(h->dump, i, j);
+        SV *s = newSV(sl ? sl : 1);
+        SvPOK_on(s); SvCUR_set(s, sl);
+        if (sl) pmat_context_common_str_copy(h->dump, i, j, (uint8_t *)SvPVX(s), sl);
+        av_push(strs, s);
+      }
+      hv_stores(ch, "common_strs", newRV_noinc((SV *)strs));
+      thlen = pmat_context_type_header_len(h->dump, i);
+      if (thlen) {
+        SV *th = newSV(thlen);
+        SvPOK_on(th); SvCUR_set(th, thlen);
+        pmat_context_type_header_copy(h->dump, i, (uint8_t *)SvPVX(th), thlen);
+        hv_stores(ch, "type_header", th);
+      } else {
+        hv_stores(ch, "type_header", newSVpvn("", 0));
+      }
+      pn = pmat_context_n_type_ptrs(h->dump, i);
+      ptrs = newAV();
+      for (j = 0; j < pn; j++)
+        av_push(ptrs, newSVuv((UV)pmat_context_type_ptr_at(h->dump, i, j)));
+      hv_stores(ch, "type_ptrs", newRV_noinc((SV *)ptrs));
+      av_push(av, newRV_noinc((SV *)ch));
+    }
+    PUSHs(sv_2mortal(newRV_noinc((SV *)av)));

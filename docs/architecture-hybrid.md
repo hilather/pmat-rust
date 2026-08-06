@@ -45,9 +45,14 @@ Default for this phase: **`perl`** (or auto only after documented readiness). Ru
 ## Perl compatibility
 
 - Public API remains blessed hash SV proxies in the legacy class hierarchy.
-- One strongly cached proxy per ObjectId for dump lifetime (identity + `tool_*` keys).
-- Built-in hot paths use **batch** native queries; proxies materialize only when needed.
-- `heap()` may still materialize all proxies when explicitly called (0.54 semantics).
+- One strongly cached proxy per ObjectId for dump lifetime (identity + `tool_*` keys),
+  via `Dumpfile` heap map + `_proxy_by_id` under the Rust load path.
+- Rust load materializes type-specific payloads (headers/ptrs/strs/bodies, magic,
+  saved slots, contexts, stack, mortals) so Identify/Sizes/Reachability/plugins
+  run unchanged on forced-Rust dumps.
+- Hot graph queries also expose **batch** native CSR edges (`outrefs_batch` /
+  `inrefs_batch` / `type_counts`) for differential and future non-materializing paths.
+- `heap()` materializes all proxies when called (0.54 semantics).
 
 ## Format
 

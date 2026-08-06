@@ -425,20 +425,9 @@ CODE:
     }
 
     if(flags & 0x08) {
+      /* Always copy: swipe is unsafe with COW / temporary SVs from Rust materialization. */
       sv->pv_strlen = SvCUR(pv);
-
-      if(SvLEN(pv) && !SvOOK(pv)) {
-        /* Swipe pv's buffer */
-        sv->pv = SvPVX(pv);
-
-        SvPVX(pv) = NULL;
-        SvCUR(pv) = 0;
-        SvLEN(pv) = 0;
-        SvPOK_off(pv);
-      }
-      else {
-        sv->pv = savepvn(SvPV_nolen(pv), SvCUR(pv));
-      }
+      sv->pv = savepvn(SvPV_nolen(pv), SvCUR(pv));
     }
   }
 
@@ -873,13 +862,15 @@ CODE:
     cv->protosub_at = 0;
     cv->padnames_at = 0;
 
+    /* Use savepvn (not save_string/HeKEY): HeKEY pointers can move when the
+     * intern hash rehashes under high-volume Rust materialization. */
     if(SvPOK(file))
-      cv->file = save_string(SvPV_nolen(file), 0);
+      cv->file = savepvn(SvPV_nolen(file), SvCUR(file));
     else
       cv->file = NULL;
 
     if(SvPOK(name))
-      cv->name = save_string(SvPV_nolen(name), 0);
+      cv->name = savepvn(SvPV_nolen(name), SvCUR(name));
     else
       cv->name = NULL;
   }
@@ -891,7 +882,9 @@ CODE:
     struct pmat_sv_code *cv = (struct pmat_sv_code *)get_pmat_sv(self);
 
     if(cv->file)
-      drop_string(cv->file, 0);
+      Safefree(cv->file);
+    if(cv->name)
+      Safefree(cv->name);
 
     free_pmat_sv((struct pmat_sv *)cv);
   }

@@ -155,10 +155,8 @@ sub load
    return $class->_load_perl( $path, %args );
 }
 
-# Forced-Rust path: parse via pmat-core, materialize lightweight SV proxies so
-# summary/count/heap APIs work. Reverse/forward edges live in the native core
-# (batch queries); full outrefs() on proxies may be incomplete until a later
-# parity phase.
+# Forced-Rust path: parse via pmat-core, materialize full SV proxies so tools
+# (identify, sizes, reachability, plugins) match 0.54 oracle behaviour.
 sub _load_rust
 {
    my $class = shift;
@@ -170,11 +168,11 @@ sub _load_rust
    require Devel::MAT::Core;
    my $core = Devel::MAT::Core->load( $path );
 
+   # Default host-endian 64-bit; override if needed by dump meta later.
    my $self = bless {
       backend   => 'rust',
       rust_core => $core,
       path      => $path,
-      # Host-endian 64-bit assumptions match Dumper native writes on this build.
       big_endian => 0,
       u32_fmt    => 'L<',
       u64_fmt    => 'Q<',
@@ -197,6 +195,7 @@ sub _load_rust
       sv_sizes   => [],
       svx_sizes  => [],
       ctx_sizes  => [],
+      _proxy_by_id => [],  # ObjectId => proxy for PAR-070 identity
    }, $class;
 
    # Roots
@@ -208,7 +207,7 @@ sub _load_rust
       $roots->{$name} = [ $r->{addr}, $desc ];
    }
 
-   # Immortal objects for undef/yes/no if present as roots
+   # Immortal objects for undef/yes/no (same construction as Perl path)
    for my $imm (qw( undef yes no )) {
       my $key = "sv_$imm";
       my $addr = $roots->{$key}[0] // next;
@@ -217,18 +216,77 @@ sub _load_rust
       $self->{"${imm}_at"} = $addr;
    }
 
-   # Materialize heap SV proxies (core fields only), one object at a time.
+   # Materialize heap SV proxies with full type payloads
    $progress->( "Materializing SV proxies from rust core..." ) if $progress;
    my $heap  = $self->{heap};
    my $total = $core->heap_count;
    for my $id ( 0 .. $total - 1 ) {
-      my $row = $core->object_at($id) or next;
-      my ( $addr, $type, $refcnt, $size, $blessed ) = @$row;
-      my $sv = _rust_make_sv( $self, $type, $addr, $refcnt, $size, $blessed );
-      $heap->{$addr} = $sv if $sv;
+      warn "DETAIL $id
+" if $ENV{PMAT_DEBUG_RUST};
+      my $detail = $core->object_detail($id) or next;
+      warn "MAKE $id type=$detail->{type}
+" if $ENV{PMAT_DEBUG_RUST};
+      my $sv = eval { _rust_make_sv_full( $self, $id, $detail ) };
+      if ($@) { warn "MAKE FAIL id=$id type=$detail->{type}: $@"; die $@ }
+      if ( $sv ) {
+         $heap->{ $detail->{addr} } = $sv;
+         $self->{_proxy_by_id}[$id] = $sv;
+      }
       $progress->( sprintf "Materializing %d of %d (%.2f%%)",
          $id + 1, $total, 100 * ( $id + 1 ) / ( $total || 1 ) )
          if $progress && ( ( $id + 1 ) % 20000 ) == 0;
+   }
+
+   # Stack
+   $self->{stack_at} = [ @{ $core->stack // [] } ];
+
+   # Mortals
+   my $mortals = $core->mortals // [];
+   if ( @$mortals ) {
+      $self->{mortals_at} = [ @$mortals ];
+      for my $addr ( @$mortals ) {
+         my $sv = $self->sv_at($addr) or next;
+         $sv->_set_is_mortal if $sv->can('_set_is_mortal');
+      }
+   }
+
+   # Contexts (call stack)
+   require Devel::MAT::Context;
+   my @contexts;
+   if ( $core->can('contexts_raw') ) {
+      for my $cr ( @{ $core->contexts_raw // [] } ) {
+         my $ctype = $cr->{type} // next;
+         my $ctx = eval {
+            Devel::MAT::Context->new(
+               $ctype, $self,
+               $cr->{common_header} // '',
+               undef,
+               $cr->{common_strs} // [],
+            );
+         };
+         next unless $ctx;
+         eval {
+            $ctx->load(
+               $cr->{type_header} // '',
+               $cr->{type_ptrs} // [],
+               [],
+            );
+         };
+         push @contexts, $ctx;
+      }
+   }
+   $self->{contexts} = \@contexts;
+
+   # Depth fixup for SUB contexts (format_minor >= 2)
+   if ( $self->{format_minor} >= 2 ) {
+      my %prev_depth_by_cvaddr;
+      foreach my $ctx ( @contexts ) {
+         next unless $ctx->type eq "SUB";
+         my $cvaddr = $ctx->{cv_at};
+         my $cv = $self->sv_at($cvaddr);
+         $ctx->_set_depth( $prev_depth_by_cvaddr{$cvaddr} // ( $cv ? $cv->depth : 0 ) );
+         $prev_depth_by_cvaddr{$cvaddr} = $ctx->olddepth;
+      }
    }
 
    # Root name annotations
@@ -237,15 +295,38 @@ sub _load_rust
       $sv->{rootname} = $name;
    }
 
+   # Protosubs by oproot (must exist before fixup links clones)
+   my $protosubs = $self->{protosubs_by_oproot} = {};
+   for my $sv ( values %$heap ) {
+      next unless $sv->type eq 'CODE' and $sv->can('oproot') and $sv->oproot and $sv->is_clone;
+      $protosubs->{ $sv->oproot } = $sv;
+   }
+
+   # Fixups (PADLIST/PADNAMES reclass, glob_at, protosub, ithread consts)
+   $self->_fixup( %args ) unless $args{no_fixup};
+
    $progress->() if $progress;
    return $self;
 }
 
-sub _rust_make_sv
+# One strongly-cached proxy per ObjectId (PAR-070).
+sub rust_proxy_for_id
 {
-   my ( $df, $type, $addr, $refcnt, $size, $blessed ) = @_;
+   my $self = shift;
+   my ( $id ) = @_;
+   return $self->{_proxy_by_id}[$id] if defined $self->{_proxy_by_id}[$id];
+   return undef;
+}
 
-   # Map type code to package (mirrors SV.pm register_type)
+sub _rust_make_sv_full
+{
+   my ( $df, $id, $d ) = @_;
+   my $type = $d->{type};
+   my $addr = $d->{addr};
+   my $refcnt = $d->{refcnt};
+   my $size = $d->{size};
+   my $blessed = $d->{blessed} // 0;
+
    state $type_class = {
       1  => 'Devel::MAT::SV::GLOB',
       2  => 'Devel::MAT::SV::SCALAR',
@@ -268,16 +349,188 @@ sub _rust_make_sv
       0xff => 'Devel::MAT::SV::Unknown',
    };
 
-   my $class = $type_class->{$type} // 'Devel::MAT::SV::Unknown';
-   # Ensure packages loaded
    require Devel::MAT::SV;
-
+   my $class = $type_class->{$type} // 'Devel::MAT::SV::Unknown';
    my $self = bless {}, $class;
-   $self->_set_core_fields(
-      $type, $df,
-      $addr, $refcnt, $size,
-      $blessed // 0,
-   );
+   $self->_set_core_fields( $type, $df, $addr, $refcnt, $size, $blessed );
+
+   my $header = $d->{header} // '';
+   my $ptrs   = $d->{ptrs} // [];
+   my $strs   = $d->{strs} // [];
+
+   if ( $type == 1 ) {
+      # GLOB: header = UINT line + PTR name_hek; ptrs 0..7; strs name,file (order: NAME, FILE in load)
+      my ( $line, $name_hek ) = ( 0, 0 );
+      if ( length $header >= $df->{uint_len} + $df->{ptr_len} ) {
+         ( $line, $name_hek ) = unpack "$df->{uint_fmt} $df->{ptr_fmt}", $header;
+      }
+      $self->_set_glob_fields(
+         map { $_ // 0 } @{$ptrs}[0..7],
+         $name_hek // 0, $line // 0,
+         $strs->[1],  # file
+         $strs->[0],  # name
+      );
+   }
+   elsif ( $type == 2 ) {
+      my ( $flags, $uv, $nvbytes, $pvlen ) = ( 0, 0, "\0" x $df->{nv_len}, 0 );
+      if ( length $header ) {
+         eval {
+            ( $flags, $uv, $nvbytes, $pvlen ) =
+               unpack "C $df->{uint_fmt} a$df->{nv_len} $df->{uint_fmt}", $header;
+         };
+      }
+      my $nv = 0;
+      eval { $nv = unpack "$df->{nv_fmt}", $nvbytes // ("\0" x $df->{nv_len}); };
+      my $pv = $strs->[0];
+      $pv = "" unless defined $pv;
+      # _set_scalar_fields may swipe PV buffer; pass a copy
+      my $pv_sv = $pv;
+      $self->_set_scalar_fields( $flags // 0, $uv // 0, $nv, $pv_sv, $pvlen // length($pv), $ptrs->[0] // 0 );
+   }
+   elsif ( $type == 3 ) {
+      my $flags = length $header ? unpack( "C", $header ) : 0;
+      $self->_set_ref_fields( $ptrs->[0] // 0, $ptrs->[1] // 0, $flags & 0x01 );
+   }
+   elsif ( $type == 4 ) {
+      my $flags = $d->{array_flags} // 0;
+      my $elems = $d->{elems} // [];
+      $self->_set_array_fields( $flags, $elems );
+   }
+   elsif ( $type == 5 || $type == 6 || $type == 17 ) {
+      my $backrefs = $ptrs->[0] // 0;
+      my $hv = $d->{hash_values} // {};
+      $self->_set_hash_fields( $backrefs, $hv );
+      if ( $type == 6 || $type == 17 ) {
+         my $mro = $d->{mro_ptrs} // [];
+         @{$self}{qw( mro_linearall_at mro_linearcurrent_at mro_nextmethod_at mro_isa_at )} =
+            map { $_ // 0 } @$mro[0..3];
+         $self->{name} = $d->{stash_name} // $strs->[-1] // '';
+      }
+      if ( $type == 17 ) {
+         # CLASS field definitions
+         $self->{fields} = [ map { [ $_->[0], $_->[1] ] } @{ $d->{class_fields} // [] } ];
+         # remaining ptr after STASH portion may be adjust_blocks
+         my $mro = $d->{mro_ptrs} // [];
+         # if CLASS has adjust_blocks beyond STASH mro, it is in ptrs after stash count;
+         # best-effort: last type ptr
+         $self->{adjust_blocks_at} = $ptrs->[-1] if @$ptrs;
+      }
+   }
+   elsif ( $type == 7 ) {
+      my ( $line, $flags, $oproot, $depth, $name_hek ) = ( 0, 0, 0, -1, 0 );
+      if ( length $header ) {
+         eval {
+            ( $line, $flags, $oproot, $depth, $name_hek ) =
+               unpack "$df->{uint_fmt} C $df->{ptr_fmt} $df->{u32_fmt} $df->{ptr_fmt}", $header;
+         };
+      }
+      defined $depth or $depth = -1;
+      $name_hek //= 0;
+      # ptrs: STASH, GV(glob), OUTSIDE, PADLIST, CONSTVAL — load uses [0,2..4]
+      # Empty NAME string must stay undef so hekname is undef and symname
+      # falls through to the GLOB name (e.g. __ANON__).
+      my $code_file = $strs->[0];
+      my $code_name = $strs->[1];
+      $code_name = undef if defined $code_name && $code_name eq '';
+      $self->_set_code_fields(
+         $line // 0, $flags // 0, $oproot // 0, $depth, $name_hek,
+         $ptrs->[0] // 0,  # stash
+         $ptrs->[2] // 0,  # outside
+         $ptrs->[3] // 0,  # padlist
+         $ptrs->[4] // 0,  # constval
+         $code_file, $code_name,
+      );
+      $self->_set_glob_at( $ptrs->[1] // 0 ) if $self->can('_set_glob_at');
+      $self->{consts_at} = [ @{ $d->{code_consts} // [] } ];
+      $self->{gvs_at}    = [ @{ $d->{code_gvs} // [] } ];
+      $self->{constix}   = [ @{ $d->{code_constix} // [] } ];
+      $self->{gvix}      = [ @{ $d->{code_gvix} // [] } ];
+      if ( my $pnat = $d->{code_padnames_at} ) {
+         $self->_set_padnames_at($pnat) if $self->can('_set_padnames_at');
+      }
+      for my $pad ( @{ $d->{code_pads} // [] } ) {
+         my ( $depth, $paddr ) = @$pad;
+         $self->{pads_at}[$depth] = $paddr;
+      }
+      # Padnames (inline, for older perls)
+      if ( @{ $d->{code_padnames} // [] } ) {
+         require Struct::Dumb;
+         # Padname struct already defined in CODE package
+         for my $pn ( @{ $d->{code_padnames} } ) {
+            my $padix = $pn->{padix};
+            $self->{padnames}[$padix] = Devel::MAT::SV::CODE::Padname(
+               $pn->{name}, $pn->{ourstash}, $pn->{flags} & 0xff,
+               $pn->{fieldix} // 0, $pn->{fieldstash} // 0,
+            );
+            # field flag bit
+            if ( $pn->{flags} & 0x100 ) {
+               $self->{padnames}[$padix]->flags = $self->{padnames}[$padix]->flags | 0x100;
+            }
+         }
+      }
+      $self->{padnames} = [] if $df->{perlver} > ( ( 5 << 24 ) | ( 20 << 16 ) | 0xffff )
+         && !@{ $self->{padnames} // [] };
+   }
+   elsif ( $type == 8 ) {
+      my ( $ifileno, $ofileno ) = ( -1, -1 );
+      if ( length $header >= 2 * $df->{uint_len} ) {
+         ( $ifileno, $ofileno ) = unpack "$df->{uint_fmt}2", $header;
+         defined $_ and $_ == $df->{minus_1} and $_ = -1 for ( $ifileno, $ofileno );
+      }
+      @{$self}{qw( ifileno ofileno )} = ( $ifileno, $ofileno );
+      @{$self}{qw( topgv_at formatgv_at bottomgv_at )} = map { $_ // 0 } @{$ptrs}[0..2];
+   }
+   elsif ( $type == 9 ) {
+      if ( length $header ) {
+         eval {
+            ( $self->{type}, $self->{off}, $self->{len} ) =
+               unpack "a1 $df->{uint_fmt}2", $header;
+         };
+      }
+      $self->{targ_at} = $ptrs->[0] // 0;
+   }
+   elsif ( $type == 14 ) {
+      bless $self, "Devel::MAT::SV::BOOL";
+      $self->_set_scalar_fields( 0x01, 1, 1.0, "1", 1, 0 );
+   }
+   elsif ( $type == 15 ) {
+      bless $self, "Devel::MAT::SV::BOOL";
+      $self->_set_scalar_fields( 0x01, 0, 0, "", 0, 0 );
+   }
+   elsif ( $type == 16 ) {
+      my $fields = $d->{elems} // [];
+      $self->_set_object_fields( $fields ) if $self->can('_set_object_fields');
+   }
+   elsif ( $type == 13 ) {
+      bless $self, "Devel::MAT::SV::SCALAR";
+      $self->_set_scalar_fields( 0, 0, 0, "", 0, 0 );
+   }
+
+   # Magic
+   for my $m ( @{ $d->{magic} // [] } ) {
+      my ( $tb, $flags, $obj, $ptr, $vtbl ) = @$m;
+      my $typec = chr($tb // 0);
+      eval { $self->more_magic( $typec => $flags // 0, $obj // 0, $ptr // 0, $vtbl // 0 ); };
+      warn "magic fail: $@" if $@;
+   }
+
+   # Annotations
+   for my $a ( @{ $d->{annotations} // [] } ) {
+      my ( $val_at, $name ) = @$a;
+      $self->_more_annotations( $val_at, $name );
+   }
+
+   # Saved slots (SVx 0x81-0x86)
+   for my $s ( @{ $d->{saved} // [] } ) {
+      my ( $kind, $idx, $saddr ) = @$s;
+      if ( $kind == 1 ) { $self->_more_saved( SCALAR => $saddr ) if $self->can('_more_saved'); }
+      elsif ( $kind == 2 ) { $self->_more_saved( ARRAY => $saddr ) if $self->can('_more_saved'); }
+      elsif ( $kind == 3 ) { $self->_more_saved( HASH => $saddr ) if $self->can('_more_saved'); }
+      elsif ( $kind == 4 ) { $self->_more_saved( $idx, $saddr ) if $self->can('_more_saved'); } # ARRAY elem
+      elsif ( $kind == 5 ) { $self->_more_saved( $idx, $saddr ) if $self->can('_more_saved'); } # HASH key,val
+      elsif ( $kind == 6 ) { $self->_more_saved( CODE => $saddr ) if $self->can('_more_saved'); }
+   }
+
    return $self;
 }
 

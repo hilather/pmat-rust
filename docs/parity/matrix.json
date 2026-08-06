@@ -7,10 +7,19 @@
     {"id": "PAR-000", "surface": "original unit tests forced perl", "perl": "pass", "rust": "n/a"},
     {"id": "PAR-001", "surface": "backend selection", "perl": "pass", "rust": "pass"},
     {"id": "PAR-010", "surface": "load format minor <=6", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-011", "surface": "reject unknown format / bad magic", "perl": "pass", "rust": "pass"},
     {"id": "PAR-020", "surface": "type counts", "perl": "pass", "rust": "pass"},
     {"id": "PAR-021", "surface": "summary one-shot", "perl": "pass", "rust": "pass"},
     {"id": "PAR-030", "surface": "outrefs sample", "perl": "pass", "rust": "pass"},
     {"id": "PAR-031", "surface": "inrefs reverse edges", "perl": "pass", "rust": "pass"},
-    {"id": "PAR-070", "surface": "SV proxy identity", "perl": "pass", "rust": "wip"}
+    {"id": "PAR-040", "surface": "identify", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-050", "surface": "sizes structure/owned", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-060", "surface": "reachability", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-070", "surface": "SV proxy identity", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-080", "surface": "plugin discovery / tool_*", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-090", "surface": "companion executables", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-100", "surface": "malformed dumps", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-110", "surface": "persistent .pmat.idx", "perl": "n/a", "rust": "wip"},
+    {"id": "PAR-120", "surface": "TTY / non-TTY formatting", "perl": "pass", "rust": "pass"}
   ]
 }

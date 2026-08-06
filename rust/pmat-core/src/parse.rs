@@ -26,19 +26,82 @@ pub struct Edge {
     pub strength: Strength,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
+pub struct HashEntry {
+    pub key: Vec<u8>,
+    pub hek: u64,
+    pub value: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct MagicRec {
+    pub type_byte: u8,
+    pub flags: u8,
+    pub obj: u64,
+    pub ptr: u64,
+    pub vtbl: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CodePadname {
+    pub padix: u32,
+    pub name: Vec<u8>,
+    pub ourstash: u64,
+    pub flags: u16,
+    pub fieldix: u64,
+    pub fieldstash: u64,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct Object {
     pub addr: u64,
     pub type_code: u8,
     pub refcnt: u32,
     pub size: u64,
     pub blessed_at: u64,
+    /// Type-specific header bytes (after common header).
+    pub header: Vec<u8>,
+    pub ptrs: Vec<u64>,
+    pub strs: Vec<Vec<u8>>,
+    pub array_flags: u8,
+    pub elems: Vec<u64>,
+    pub hash_entries: Vec<HashEntry>,
+    pub code_consts: Vec<u64>,
+    pub code_constix: Vec<u64>,
+    pub code_gvs: Vec<u64>,
+    pub code_gvix: Vec<u64>,
+    pub code_padnames_at: u64,
+    pub code_pads: Vec<(u32, u64)>,
+    pub code_padnames: Vec<CodePadname>,
+    pub object_fields: Vec<u64>,
+    pub magic: Vec<MagicRec>,
+    /// SVx saved slots: (kind, index_or_0, addr) kind: 1=SCALAR,2=ARRAY,3=HASH,4=elem idx,5=hash key
+    pub saved: Vec<(u8, u64, u64)>,
+    pub annotations: Vec<(u64, Vec<u8>)>,
+    /// STASH/CLASS name (from type strs beyond HASH).
+    pub stash_name: Vec<u8>,
+    pub mro_ptrs: Vec<u64>,
+    /// IO fields
+    pub io_ifileno: u64,
+    pub io_ofileno: u64,
+    pub class_fields: Vec<(u64, Vec<u8>)>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Root {
     pub name: Vec<u8>,
     pub addr: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ContextRec {
+    pub ctype: u8,
+    pub common_header: Vec<u8>,
+    pub common_ptrs: Vec<u64>,
+    pub common_strs: Vec<Vec<u8>>,
+    pub type_header: Vec<u8>,
+    pub type_ptrs: Vec<u64>,
+    pub type_strs: Vec<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -63,6 +126,10 @@ pub struct Dump {
     pub reverse_off: Vec<u32>,
     pub reverse_edges: Vec<Edge>,
     pub type_counts: [u64; 256],
+    pub stack: Vec<u64>,
+    pub mortals: Vec<u64>,
+    pub mortal_floor: u64,
+    pub contexts: Vec<ContextRec>,
 }
 
 pub static TYPE_NAMES: [&str; 18] = [
@@ -325,42 +392,80 @@ impl Dump {
                 for _ in 0..np {
                     ext_ptrs.push(c.ptr()?);
                 }
+                let mut ext_strs: Vec<Vec<u8>> = Vec::new();
                 for _ in 0..ns {
-                    let _ = c.str_bytes()?;
+                    ext_strs.push(c.str_bytes()?);
                 }
-                // Note: from may not be in addr_to_id yet if extension appears before
-                // the SV in rare order — queue stores from_addr and resolve later.
-                // Here SV is typically already present (extensions follow their SV).
                 if let Some(&from) = addr_to_id.get(&sv_addr) {
                     if type_code == 0x80 {
-                        // MAGIC: bytes = [type_char, flags], ptrs = [obj, ptr, vtbl]
-                        // 0.54: obj is strong iff flags&0x01 (MGf_REFCOUNTED), else weak;
-                        //       ptr is strong when present.
+                        let type_byte = _bytes.first().copied().unwrap_or(0);
                         let flags = _bytes.get(1).copied().unwrap_or(0);
-                        if let Some(&obj) = ext_ptrs.first() {
-                            if obj != 0 {
-                                let strength = if flags & 0x01 != 0 {
-                                    Strength::Strong
-                                } else {
-                                    Strength::Weak
-                                };
-                                pending.push(PendingEdge {
-                                    from,
-                                    to_addr: obj,
-                                    strength,
-                                });
-                            }
+                        let obj = ext_ptrs.first().copied().unwrap_or(0);
+                        let mptr = ext_ptrs.get(1).copied().unwrap_or(0);
+                        let vtbl = ext_ptrs.get(2).copied().unwrap_or(0);
+                        objects[from as usize].magic.push(MagicRec {
+                            type_byte,
+                            flags,
+                            obj,
+                            ptr: mptr,
+                            vtbl,
+                        });
+                        if obj != 0 {
+                            let strength = if flags & 0x01 != 0 {
+                                Strength::Strong
+                            } else {
+                                Strength::Weak
+                            };
+                            pending.push(PendingEdge {
+                                from,
+                                to_addr: obj,
+                                strength,
+                            });
                         }
-                        if let Some(&mptr) = ext_ptrs.get(1) {
-                            if mptr != 0 {
-                                pending.push(PendingEdge {
-                                    from,
-                                    to_addr: mptr,
-                                    strength: Strength::Strong,
-                                });
-                            }
+                        if mptr != 0 {
+                            pending.push(PendingEdge {
+                                from,
+                                to_addr: mptr,
+                                strength: Strength::Strong,
+                            });
                         }
-                        // vtbl is not an SV edge
+                    } else if type_code == 0x81 {
+                        let p = ext_ptrs.first().copied().unwrap_or(0);
+                        objects[from as usize].saved.push((1, 0, p));
+                    } else if type_code == 0x82 {
+                        let p = ext_ptrs.first().copied().unwrap_or(0);
+                        objects[from as usize].saved.push((2, 0, p));
+                    } else if type_code == 0x83 {
+                        let p = ext_ptrs.first().copied().unwrap_or(0);
+                        objects[from as usize].saved.push((3, 0, p));
+                    } else if type_code == 0x84 {
+                        // ARRAY elem saved: header uint index, ptr value
+                        let idx = if !_bytes.is_empty() {
+                            unpack_uint(&_bytes, c.big_endian, c.uint_len).unwrap_or(0)
+                        } else {
+                            0
+                        };
+                        let p = ext_ptrs.first().copied().unwrap_or(0);
+                        objects[from as usize].saved.push((4, idx, p));
+                    } else if type_code == 0x85 {
+                        // HASH elem saved: ptrs key_addr, val_addr
+                        let k = ext_ptrs.first().copied().unwrap_or(0);
+                        let v = ext_ptrs.get(1).copied().unwrap_or(0);
+                        objects[from as usize].saved.push((5, k, v));
+                    } else if type_code == 0x86 {
+                        let p = ext_ptrs.first().copied().unwrap_or(0);
+                        objects[from as usize].saved.push((6, 0, p)); // CODE slot
+                    } else if type_code == 0x87 {
+                        let p = ext_ptrs.first().copied().unwrap_or(0);
+                        let name = ext_strs.first().cloned().unwrap_or_default();
+                        objects[from as usize].annotations.push((p, name));
+                        if p != 0 {
+                            pending.push(PendingEdge {
+                                from,
+                                to_addr: p,
+                                strength: Strength::Strong,
+                            });
+                        }
                     } else {
                         for &p in &ext_ptrs {
                             if p != 0 {
@@ -408,13 +513,18 @@ impl Dump {
             let id = objects.len() as ObjectId;
             let body_pos = c.pos;
 
-            objects.push(Object {
+            let mut obj = Object {
                 addr,
                 type_code,
                 refcnt,
                 size,
                 blessed_at,
-            });
+                header: type_header.clone(),
+                ptrs: type_ptrs.clone(),
+                strs: type_strs.clone(),
+                ..Default::default()
+            };
+            objects.push(obj);
             addr_to_id.insert(addr, id);
             type_counts[type_code as usize] += 1;
 
@@ -503,15 +613,23 @@ impl Dump {
                     }
                 }
                 4 => {
-                    // ARRAY body: COUNT ptrs
+                    // ARRAY body: COUNT ptrs; flags may follow count in header
                     let n = unpack_uint(&type_header, c.big_endian, c.uint_len)? as usize;
+                    let flags = if type_header.len() > c.uint_len {
+                        type_header[c.uint_len]
+                    } else {
+                        0
+                    };
                     if n > c.remaining() / c.ptr_len.max(1) + 1 {
                         return Err(format!(
                             "ARRAY count {n} looks corrupt (type={type_code} id={id} pos={body_pos})"
                         ));
                     }
+                    objects[id as usize].array_flags = flags;
+                    let mut elems = Vec::with_capacity(n);
                     for _ in 0..n {
                         let elem = c.ptr()?;
+                        elems.push(elem);
                         if elem != 0 {
                             pending.push(PendingEdge {
                                 from: id,
@@ -520,6 +638,7 @@ impl Dump {
                             });
                         }
                     }
+                    objects[id as usize].elems = elems;
                 }
                 5 | 6 | 17 => {
                     // HASH / STASH / CLASS: body keys
@@ -534,16 +653,25 @@ impl Dump {
                             });
                         }
                     }
+                    // STASH/CLASS: ptrs after HASH backrefs are MRO; strs include name
+                    if type_code == 6 || type_code == 17 {
+                        // HASH uses 1 ptr (backrefs); remaining ptrs are MRO
+                        if type_ptrs.len() > 1 {
+                            objects[id as usize].mro_ptrs = type_ptrs[1..].to_vec();
+                        }
+                        if let Some(name) = type_strs.first() {
+                            objects[id as usize].stash_name = name.clone();
+                        }
+                    }
+                    let mut entries = Vec::with_capacity(n);
                     for i in 0..n {
-                        let _key = c.str_bytes().map_err(|e| {
+                        let key = c.str_bytes().map_err(|e| {
                             format!(
                                 "hash key {i}/{n}: {e} (type={type_code} id={id} addr={addr:#x} body_pos={body_pos} now={})",
                                 c.pos
                             )
                         })?;
-                        if has_hek {
-                            let _hek = c.ptr()?;
-                        }
+                        let hek = if has_hek { c.ptr()? } else { 0 };
                         let val = c.ptr()?;
                         if val != 0 {
                             pending.push(PendingEdge {
@@ -552,7 +680,9 @@ impl Dump {
                                 strength: Strength::Strong,
                             });
                         }
+                        entries.push(HashEntry { key, hek, value: val });
                     }
+                    objects[id as usize].hash_entries = entries;
                     // CLASS has trailing CLASSx tags until 0 (see SV::CLASS::load)
                     if type_code == 17 {
                         loop {
@@ -561,9 +691,9 @@ impl Dump {
                                 break;
                             }
                             if bt == 1 {
-                                // FIELD: fieldix + name
-                                let _fieldix = c.uint()?;
-                                let _name = c.str_bytes()?;
+                                let fieldix = c.uint()?;
+                                let name = c.str_bytes()?;
+                                objects[id as usize].class_fields.push((fieldix, name));
                             } else {
                                 return Err(format!(
                                     "unknown CLASSx tag {bt} (id={id} addr={addr:#x})"
@@ -583,7 +713,6 @@ impl Dump {
                             });
                         }
                     }
-                    // CODEx body tags mirror Devel::MAT::SV::CODE::load (0.54)
                     loop {
                         let bt = c.u8()?;
                         if bt == 0 {
@@ -591,8 +720,8 @@ impl Dump {
                         }
                         match bt {
                             1 => {
-                                // CONSTSV
                                 let p = c.ptr()?;
+                                objects[id as usize].code_consts.push(p);
                                 if p != 0 {
                                     pending.push(PendingEdge {
                                         from: id,
@@ -602,12 +731,11 @@ impl Dump {
                                 }
                             }
                             2 => {
-                                // CONSTIX
-                                let _ = c.uint()?;
+                                objects[id as usize].code_constix.push(c.uint()?);
                             }
                             3 => {
-                                // GVSV
                                 let p = c.ptr()?;
+                                objects[id as usize].code_gvs.push(p);
                                 if p != 0 {
                                     pending.push(PendingEdge {
                                         from: id,
@@ -617,14 +745,20 @@ impl Dump {
                                 }
                             }
                             4 => {
-                                // GVIX
-                                let _ = c.uint()?;
+                                objects[id as usize].code_gvix.push(c.uint()?);
                             }
                             5 => {
-                                // PADNAME at padix: str name + ptr ourstash
-                                let _padix = c.uint()?;
-                                let _name = c.str_bytes()?;
+                                let padix = c.uint()? as u32;
+                                let name = c.str_bytes()?;
                                 let p = c.ptr()?;
+                                objects[id as usize].code_padnames.push(CodePadname {
+                                    padix,
+                                    name,
+                                    ourstash: p,
+                                    flags: 0,
+                                    fieldix: 0,
+                                    fieldstash: 0,
+                                });
                                 if p != 0 {
                                     pending.push(PendingEdge {
                                         from: id,
@@ -634,7 +768,6 @@ impl Dump {
                                 }
                             }
                             6 => {
-                                // legacy padsvs: uint, uint, ptr
                                 let _ = c.uint()?;
                                 let _ = c.uint()?;
                                 let p = c.ptr()?;
@@ -647,8 +780,8 @@ impl Dump {
                                 }
                             }
                             7 => {
-                                // PADNAMES ptr
                                 let p = c.ptr()?;
+                                objects[id as usize].code_padnames_at = p;
                                 if p != 0 {
                                     pending.push(PendingEdge {
                                         from: id,
@@ -658,9 +791,9 @@ impl Dump {
                                 }
                             }
                             8 => {
-                                // PAD at depth
-                                let _depth = c.uint()?;
+                                let depth = c.uint()? as u32;
                                 let p = c.ptr()?;
+                                objects[id as usize].code_pads.push((depth, p));
                                 if p != 0 {
                                     pending.push(PendingEdge {
                                         from: id,
@@ -670,15 +803,38 @@ impl Dump {
                                 }
                             }
                             9 => {
-                                // PADNAME_FLAGS
-                                let _padix = c.uint()?;
-                                let _flags = c.u8()?;
+                                let padix = c.uint()? as u32;
+                                let flags = c.u8()?;
+                                if let Some(pn) = objects[id as usize]
+                                    .code_padnames
+                                    .iter_mut()
+                                    .find(|p| p.padix == padix)
+                                {
+                                    pn.flags = flags as u16;
+                                } else {
+                                    objects[id as usize].code_padnames.push(CodePadname {
+                                        padix,
+                                        name: Vec::new(),
+                                        ourstash: 0,
+                                        flags: flags as u16,
+                                        fieldix: 0,
+                                        fieldstash: 0,
+                                    });
+                                }
                             }
                             10 => {
-                                // PADNAME_FIELD
-                                let _padix = c.uint()?;
-                                let _fieldix = c.uint()?;
+                                let padix = c.uint()? as u32;
+                                let fieldix = c.uint()?;
                                 let p = c.ptr()?;
+                                if let Some(pn) = objects[id as usize]
+                                    .code_padnames
+                                    .iter_mut()
+                                    .find(|x| x.padix == padix)
+                                {
+                                    pn.flags |= 0x100;
+                                    pn.fieldix = fieldix;
+                                    pn.fieldstash = p;
+                                }
                                 if p != 0 {
                                     pending.push(PendingEdge {
                                         from: id,
@@ -693,8 +849,29 @@ impl Dump {
                         }
                     }
                 }
-                8 | 9 => {
-                    // IO / LVALUE
+                8 => {
+                    // IO
+                    if type_header.len() >= c.uint_len * 2 {
+                        objects[id as usize].io_ifileno =
+                            unpack_uint(&type_header[0..c.uint_len], c.big_endian, c.uint_len)?;
+                        objects[id as usize].io_ofileno = unpack_uint(
+                            &type_header[c.uint_len..c.uint_len * 2],
+                            c.big_endian,
+                            c.uint_len,
+                        )?;
+                    }
+                    for &p in &type_ptrs {
+                        if p != 0 {
+                            pending.push(PendingEdge {
+                                from: id,
+                                to_addr: p,
+                                strength: Strength::Strong,
+                            });
+                        }
+                    }
+                }
+                9 => {
+                    // LVALUE
                     for &p in &type_ptrs {
                         if p != 0 {
                             pending.push(PendingEdge {
@@ -708,8 +885,10 @@ impl Dump {
                 16 => {
                     // OBJECT: UINT COUNT in header + COUNT field ptrs
                     let n = unpack_uint(&type_header, c.big_endian, c.uint_len)? as usize;
+                    let mut fields = Vec::with_capacity(n);
                     for _ in 0..n {
                         let p = c.ptr()?;
+                        fields.push(p);
                         if p != 0 {
                             pending.push(PendingEdge {
                                 from: id,
@@ -718,6 +897,8 @@ impl Dump {
                             });
                         }
                     }
+                    objects[id as usize].object_fields = fields.clone();
+                    objects[id as usize].elems = fields;
                 }
                 0x7F => {
                     // STRUCT: fields by meta — ptr fields only known via meta types;
@@ -744,6 +925,7 @@ impl Dump {
         }
 
         // Contexts
+        let mut contexts: Vec<ContextRec> = Vec::new();
         if format_minor >= 2 && !ctx_sizes.is_empty() {
             let (ch, cnp, cns) = ctx_sizes[0];
             loop {
@@ -751,35 +933,51 @@ impl Dump {
                 if ctype == 0 {
                     break;
                 }
-                let _ = c.read_exact(ch as usize)?;
+                let common_header = c.read_exact(ch as usize)?.to_vec();
+                let mut common_ptrs = Vec::new();
                 for _ in 0..cnp {
-                    let _ = c.ptr()?;
+                    common_ptrs.push(c.ptr()?);
                 }
+                let mut common_strs = Vec::new();
                 for _ in 0..cns {
-                    let _ = c.str_bytes()?;
+                    common_strs.push(c.str_bytes()?);
                 }
+                let mut type_header = Vec::new();
+                let mut type_ptrs = Vec::new();
+                let mut type_strs = Vec::new();
                 if (ctype as usize) < ctx_sizes.len() {
                     let (th, tnp, tns) = ctx_sizes[ctype as usize];
-                    let _ = c.read_exact(th as usize)?;
+                    type_header = c.read_exact(th as usize)?.to_vec();
                     for _ in 0..tnp {
-                        let _ = c.ptr()?;
+                        type_ptrs.push(c.ptr()?);
                     }
                     for _ in 0..tns {
-                        let _ = c.str_bytes()?;
+                        type_strs.push(c.str_bytes()?);
                     }
                 }
+                contexts.push(ContextRec {
+                    ctype,
+                    common_header,
+                    common_ptrs,
+                    common_strs,
+                    type_header,
+                    type_ptrs,
+                    type_strs,
+                });
             }
         }
 
         // Mortals (optional trailing)
+        let mut mortals: Vec<u64> = Vec::new();
+        let mut mortal_floor: u64 = 0;
         if c.remaining() >= c.uint_len {
             let mortalcount = c.uint()? as usize;
             if mortalcount > 0 {
                 for _ in 0..mortalcount {
-                    let _ = c.ptr()?;
+                    mortals.push(c.ptr()?);
                 }
                 if c.remaining() >= c.uint_len {
-                    let _floor = c.uint()?;
+                    mortal_floor = c.uint()?;
                 }
             }
         }
@@ -802,6 +1000,7 @@ impl Dump {
                     refcnt: 1,
                     size: 0,
                     blessed_at: 0,
+                    ..Default::default()
                 });
                 addr_to_id.insert(addr, id);
                 // Do not increment type_counts — these are synthetic placeholders.
@@ -865,6 +1064,10 @@ impl Dump {
             reverse_off,
             reverse_edges,
             type_counts,
+            stack,
+            mortals,
+            mortal_floor,
+            contexts,
         })
     }
 
