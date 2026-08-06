@@ -1,0 +1,164 @@
+#!/usr/bin/env perl
+# Generate .pmat fixtures for tests and benchmarks.
+#
+# Examples:
+#   ./bench/gen-fixture                  # micro + small (quick)
+#   ./bench/gen-fixture --size=test      # micro only
+#   ./bench/gen-fixture --size=medium
+#   ./bench/gen-fixture --size=huge
+#   ./bench/gen-fixture --size=17G       # full 17 GiB synthetic dump
+#   ./bench/gen-fixture --size=all --force
+
+use v5.14;
+use warnings;
+use FindBin;
+use File::Spec;
+use Getopt::Long qw( GetOptions );
+use Time::HiRes qw( time );
+
+use lib File::Spec->catdir( $FindBin::Bin, 'lib' );
+use lib File::Spec->catdir( $FindBin::Bin, '..', 'blib', 'lib' );
+use lib File::Spec->catdir( $FindBin::Bin, '..', 'blib', 'arch' );
+use lib File::Spec->catdir( $FindBin::Bin, '..', 'local', 'lib', 'perl5' );
+
+use PMAT::Bench::Tiers qw( resolve_tiers all_tier_names );
+use PMAT::Bench::Fixture;
+use PMAT::Bench::Util qw( format_bytes format_duration );
+
+my $size_spec   = $ENV{PMAT_BENCH_SIZE} // 'test,default';
+my $dir;
+my $force       = 0;
+my $count_svs   = 1;
+my $target_bytes;
+my $quiet       = 0;
+my $list        = 0;
+my $shape;      # optional override for dumper tiers
+
+GetOptions(
+   'size|s=s'         => \$size_spec,
+   'dir|d=s'          => \$dir,
+   'force|f'          => \$force,
+   'count-svs!'       => \$count_svs,
+   'target-bytes=s'   => \$target_bytes,
+   'shape=s'          => \$shape,
+   'quiet|q'          => \$quiet,
+   'list'             => \$list,
+   'help|h'           => sub { print_usage(); exit 0 },
+) or do { print_usage(); exit 2 };
+
+if ( $list ) {
+   for my $name ( all_tier_names() ) {
+      my $t = PMAT::Bench::Tiers::tier_info($name);
+      if ( $t->{method} eq 'synthetic' ) {
+         printf "%-8s  synthetic bulk  default_target=%s  max=%s\n",
+            $name,
+            format_bytes( $t->{target_bytes} ),
+            format_bytes( $t->{max_target_bytes} );
+      }
+      else {
+         printf "%-8s  dumper shape=%s nodes=%d  (~gen RSS %s)\n",
+            $name, $t->{shape}, $t->{nodes},
+            format_bytes( ( $t->{gen_rss_hint_mb} // 0 ) * 1024 * 1024 );
+      }
+   }
+   exit 0;
+}
+
+my $tb;
+if ( defined $target_bytes ) {
+   $tb = parse_bytes($target_bytes);
+}
+
+my @tiers = resolve_tiers( $size_spec, target_bytes => $tb );
+if ( defined $shape ) {
+   $_->{shape} = $shape for grep { $_->{method} eq 'dumper' } @tiers;
+}
+
+my $progress = $quiet ? undef : sub {
+   my $msg = shift // "";
+   print STDERR "\r\e[K$msg";
+   print STDERR "\n" if $msg eq "" || $msg =~ /\n$/;
+};
+
+print STDERR "Fixtures dir: ", PMAT::Bench::Fixture->fixtures_dir($dir), "\n" unless $quiet;
+
+for my $tier ( @tiers ) {
+   # Disk space guard for huge synthetic dumps
+   if ( $tier->{method} eq 'synthetic' ) {
+      my $need = $tier->{target_bytes} // 0;
+      my $dest = PMAT::Bench::Fixture->fixtures_dir($dir);
+      if ( my $free = free_bytes($dest) ) {
+         if ( $free < $need * 1.05 ) {
+            die sprintf(
+               "Not enough free disk for %s: need ~%s, free %s under %s\n",
+               $tier->{name}, format_bytes($need), format_bytes($free), $dest
+            );
+         }
+      }
+   }
+
+   my $t0 = time;
+   my ( $path, $meta ) = PMAT::Bench::Fixture->ensure(
+      $tier,
+      dir       => $dir,
+      force     => $force,
+      progress  => $progress,
+      count_svs => $count_svs && $tier->{method} eq 'dumper',
+   );
+   $progress->("") if $progress;
+
+   printf "%-8s  %s\n", $tier->{name}, $path;
+   printf "         bytes=%s", format_bytes( $meta->{bytes} );
+   printf "  heap_svs=%s", $meta->{heap_svs} if defined $meta->{heap_svs};
+   printf "  gen=%s", format_duration( $meta->{generate_s} ) if defined $meta->{generate_s};
+   print "\n";
+}
+
+exit 0;
+
+sub parse_bytes {
+   my ( $s ) = @_;
+   if ( $s =~ /^(\d+(?:\.\d+)?)\s*([kKmMgG]i?B?)?$/ ) {
+      my ( $n, $u ) = ( $1, lc( $2 // '' ) );
+      return int( $n ) if $u eq '';
+      return int( $n * 1024 ) if $u =~ /^k/;
+      return int( $n * 1024**2 ) if $u =~ /^m/;
+      return int( $n * 1024**3 ) if $u =~ /^g/;
+   }
+   die "Bad --target-bytes value '$s' (want e.g. 256M, 2G, 17G)\n";
+}
+
+sub free_bytes {
+   my ( $path ) = @_;
+   # df -PB1
+   my $out = `df -PB1 \Q$path\E 2>/dev/null`;
+   return undef unless defined $out && length $out;
+   my @lines = split /\n/, $out;
+   return undef unless @lines >= 2;
+   my @f = split /\s+/, $lines[-1];
+   # Filesystem 1B-blocks Used Available Use% Mounted
+   return 0 + $f[3] if @f >= 4 && $f[3] =~ /^\d+$/;
+   return undef;
+}
+
+sub print_usage {
+   print <<'USAGE';
+Usage: gen-fixture [options]
+
+  --size, -s SPEC     Size tier(s): default|quick|test|all|micro|small|
+                      medium|large|xlarge|huge|17G  (default: test,default)
+  --dir, -d DIR       Fixtures directory (default: ./fixtures or $PMAT_FIXTURES)
+  --force, -f         Regenerate even if fixture exists
+  --target-bytes N    Override huge synthetic size (e.g. 256M, 2G, 17G)
+  --shape SHAPE       Override dumper shape: mixed|wide|deep|pv
+  --no-count-svs      Skip post-load SV counting for dumper fixtures
+  --list              List tiers and exit
+  --quiet, -q
+  --help, -h
+
+Environment:
+  PMAT_BENCH_SIZE     Default for --size
+  PMAT_FIXTURES       Default fixtures directory
+  PMAT_HUGE_BYTES     Override huge target in bytes (integer)
+USAGE
+}

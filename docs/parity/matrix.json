@@ -1,0 +1,16 @@
+{
+  "oracle": "Devel-MAT-0.54",
+  "format_minor_max": 6,
+  "backend_env": "PMAT_BACKEND",
+  "backend_values": ["perl", "rust", "auto"],
+  "rows": [
+    {"id": "PAR-000", "surface": "original unit tests forced perl", "perl": "pass", "rust": "n/a"},
+    {"id": "PAR-001", "surface": "backend selection", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-010", "surface": "load format minor <=6", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-020", "surface": "type counts", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-021", "surface": "summary one-shot", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-030", "surface": "outrefs sample", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-031", "surface": "inrefs reverse edges", "perl": "pass", "rust": "pass"},
+    {"id": "PAR-070", "surface": "SV proxy identity", "perl": "pass", "rust": "wip"}
+  ]
+}

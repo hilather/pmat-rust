@@ -1,0 +1,114 @@
+# Build and test on Rocky Linux 8 (EL8) for Perl + Rust hybrid pmat-core.
+name: CI Rocky 8
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  rocky8:
+    name: Rocky Linux 8
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system packages (Rocky 8)
+        run: |
+          set -euo pipefail
+          dnf -y install epel-release
+          dnf -y install \
+            gcc gcc-c++ make git curl ca-certificates \
+            perl perl-core perl-devel perl-ExtUtils-MakeMaker \
+            perl-Test-Simple perl-Pod-Simple \
+            openssl-devel zlib-devel
+          dnf clean all
+          perl -v | head -4
+
+      - name: Install Rust (stable)
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain stable --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # shellcheck source=/dev/null
+          source "$HOME/.cargo/env"
+          rustc --version
+          cargo --version
+
+      - name: Install cpanm and Perl module deps
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          curl -sL https://cpanmin.us | perl - App::cpanminus --notest
+          export PATH="$HOME/perl5/bin:$PATH"
+          export PERL5LIB="$HOME/perl5/lib/perl5${PERL5LIB:+:$PERL5LIB}"
+          # Install into workspace local/ for Build.PL / tests
+          export PERL_MM_OPT="INSTALL_BASE=${GITHUB_WORKSPACE}/local"
+          export PERL_MB_OPT="--install_base ${GITHUB_WORKSPACE}/local"
+          mkdir -p "${GITHUB_WORKSPACE}/local"
+          cpanm --notest --local-lib-contained "${GITHUB_WORKSPACE}/local" \
+            Module::Build \
+            ExtUtils::CBuilder \
+            ExtUtils::CChecker \
+            Devel::MAT::Dumper \
+            Commandable \
+            Feature::Compat::Try \
+            File::ShareDir \
+            Heap \
+            List::UtilsBy \
+            Module::Pluggable \
+            String::Tagged \
+            String::Tagged::Terminal \
+            Struct::Dumb \
+            XS::Parse::Keyword \
+            Syntax::Keyword::Match \
+            Term::Table \
+            Test2::V0
+          echo "PERL5LIB=${GITHUB_WORKSPACE}/local/lib/perl5${PERL5LIB:+:$PERL5LIB}" >> "$GITHUB_ENV"
+          echo "${GITHUB_WORKSPACE}/local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/perl5/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cargo build pmat-core (release)
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo build --release --manifest-path rust/pmat-core/Cargo.toml
+          ls -la rust/pmat-core/target/release/libpmat_core.*
+
+      - name: Perl Build + test
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:${GITHUB_WORKSPACE}/local/bin:$HOME/perl5/bin:$PATH"
+          export PERL5LIB="${GITHUB_WORKSPACE}/local/lib/perl5${PERL5LIB:+:$PERL5LIB}"
+          perl Build.PL
+          ./Build
+          ./Build test
+          # Forced-backend smokes
+          PMAT_BACKEND=perl prove -Iblib/lib -Iblib/arch -Ilocal/lib/perl5 t/92-backend-modes.t
+          if [[ -f blib/arch/auto/Devel/MAT/Core/Core.so ]]; then
+            PMAT_BACKEND=rust perl -Iblib/lib -Iblib/arch -Ilocal/lib/perl5 \
+              -MDevel::MAT::Core \
+              -e 'die "core unavailable\n" unless Devel::MAT::Core->available; print "rust core ok\n"'
+            PMAT_BACKEND=rust prove -Iblib/lib -Iblib/arch -Ilocal/lib/perl5 \
+              t/93-perl-rust-diff.t t/94-rust-core-api.t
+          else
+            echo "WARNING: Core.so not built; Rust backend tests skipped" >&2
+          fi
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocky8-failure-logs
+          path: |
+            MYMETA.*
+            blib/arch/**/*
+          if-no-files-found: ignore

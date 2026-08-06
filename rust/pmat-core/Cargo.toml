@@ -1,0 +1,18 @@
+[package]
+name = "pmat-core"
+version = "0.54.0"
+edition = "2021"
+description = "Dense PMAT dump parser and graph core for Devel::MAT hybrid backend"
+license = "Artistic-1.0-Perl OR GPL-1.0-or-later"
+publish = false
+
+[lib]
+name = "pmat_core"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# none — keep the FFI surface lean and portable
+
+[profile.release]
+lto = true
+codegen-units = 1

@@ -1,0 +1,30 @@
+# Build
+_build/
+Build
+blib/
+MYMETA.json
+MYMETA.yml
+*.o
+*.bs
+*.so
+# XS-generated C (from xsubpp)
+lib/Devel/MAT.c
+lib/Devel/MAT/Core.c
+
+# Local dependency prefix (optional)
+local/
+
+# Rust build artifacts
+rust/pmat-core/target/
+
+# Generated fixtures and bench output
+fixtures/*.pmat
+fixtures/*.meta.json
+bench/results/*.json
+!bench/results/.gitkeep
+!fixtures/.gitkeep
+
+# Editor / OS
+*~
+*.swp
+.DS_Store

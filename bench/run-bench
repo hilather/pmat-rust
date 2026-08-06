@@ -1,0 +1,209 @@
+#!/usr/bin/env perl
+# Benchmark Devel::MAT load + analysis phases against size-tiered fixtures.
+#
+# Quick iteration (default):
+#   ./bench/run-bench
+#
+# Specific tiers:
+#   ./bench/run-bench --size=medium
+#   ./bench/run-bench --size=huge
+#   ./bench/run-bench --size=17G          # generate/run full 17 GiB synthetic
+#
+# Existing dump (e.g. production 17 GB process dump):
+#   ./bench/run-bench --file=/path/to/big.pmat
+#
+# JSON results for before/after comparisons:
+#   ./bench/run-bench --json=bench/results/before.json
+
+use v5.14;
+use warnings;
+use FindBin;
+use File::Spec;
+use File::Path qw( make_path );
+use Getopt::Long qw( GetOptions );
+use Time::HiRes qw( time );
+
+use lib File::Spec->catdir( $FindBin::Bin, 'lib' );
+use lib File::Spec->catdir( $FindBin::Bin, '..', 'blib', 'lib' );
+use lib File::Spec->catdir( $FindBin::Bin, '..', 'blib', 'arch' );
+use lib File::Spec->catdir( $FindBin::Bin, '..', 'local', 'lib', 'perl5' );
+
+use PMAT::Bench::Tiers qw( resolve_tiers );
+use PMAT::Bench::Fixture;
+use PMAT::Bench::Runner;
+use PMAT::Bench::Util qw( format_bytes format_duration write_json );
+
+my $size_spec = $ENV{PMAT_BENCH_SIZE} // 'default';
+my $dir;
+my $file;
+my $json_out;
+my $force_gen = 0;
+my $phases_spec;
+my $target_bytes;
+my $quiet = 0;
+my $owned = 0;
+my $load_progress = 0;
+my $iterations = 1;
+
+GetOptions(
+   'size|s=s'       => \$size_spec,
+   'dir|d=s'        => \$dir,
+   'file|f=s'       => \$file,
+   'json|j=s'       => \$json_out,
+   'force-gen'      => \$force_gen,
+   'phases=s'       => \$phases_spec,
+   'target-bytes=s' => \$target_bytes,
+   'owned'          => \$owned,
+   'load-progress'  => \$load_progress,
+   'iterations|n=i' => \$iterations,
+   'quiet|q'        => \$quiet,
+   'help|h'         => sub { print_usage(); exit 0 },
+) or do { print_usage(); exit 2 };
+
+$iterations = 1 if $iterations < 1;
+
+my @phases = $phases_spec
+   ? split( /[\s,]+/, $phases_spec )
+   : qw( load inrefs heap_walk count sizes_struct reachability identify );
+push @phases, 'sizes_owned' if $owned;
+
+my $progress = $quiet ? undef : sub {
+   my $msg = shift // "";
+   print STDERR "\r\e[K$msg";
+   print STDERR "\n" if !defined $msg || $msg eq "" || $msg =~ /\n$/;
+};
+
+my @jobs;
+
+if ( $file ) {
+   -f $file or die "No such dump file: $file\n";
+   push @jobs, {
+      label => $file,
+      path  => $file,
+      tier  => undef,
+      meta  => { path => $file, bytes => -s $file, external => 1 },
+   };
+}
+else {
+   my $tb;
+   if ( defined $target_bytes ) {
+      $tb = parse_bytes($target_bytes);
+   }
+   my @tiers = resolve_tiers( $size_spec, target_bytes => $tb );
+   for my $tier ( @tiers ) {
+      print STDERR "Ensuring fixture for tier $tier->{name}...\n" unless $quiet;
+      my ( $path, $meta ) = PMAT::Bench::Fixture->ensure(
+         $tier,
+         dir      => $dir,
+         force    => $force_gen,
+         progress => $progress,
+         count_svs => 0,
+      );
+      $progress->("") if $progress;
+      push @jobs, {
+         label => $tier->{name},
+         path  => $path,
+         tier  => $tier,
+         meta  => $meta,
+      };
+   }
+}
+
+my @all_results;
+for my $job ( @jobs ) {
+   for my $iter ( 1 .. $iterations ) {
+      print STDERR "\n=== Bench $job->{label}"
+         . ( $iterations > 1 ? " (iter $iter/$iterations)" : "" )
+         . " ===\n" unless $quiet;
+
+      my $result = PMAT::Bench::Runner->run(
+         $job->{path},
+         phases        => \@phases,
+         progress      => $progress,
+         load_progress => $load_progress,
+      );
+      $progress->("") if $progress;
+
+      $result->{label} = $job->{label};
+      $result->{tier}  = $job->{tier}{name} if $job->{tier};
+      $result->{fixture_meta} = $job->{meta};
+      $result->{iteration} = $iter;
+
+      print PMAT::Bench::Runner->format_report($result) unless $quiet;
+      push @all_results, $result;
+   }
+}
+
+if ( $json_out ) {
+   my $abs = File::Spec->rel2abs($json_out);
+   my ( $vol, $jdir, undef ) = File::Spec->splitpath($abs);
+   my $parent = File::Spec->catpath( $vol, $jdir, '' );
+   make_path($parent) if length $parent && !-d $parent;
+
+   write_json( $abs, {
+      created_unix => time(),
+      results      => \@all_results,
+   } );
+   print STDERR "Wrote JSON results to $abs\n" unless $quiet;
+}
+
+# Summary table across jobs
+if ( @all_results > 1 && !$quiet ) {
+   print "\nSummary (load + inrefs):\n";
+   printf "%-12s %10s %10s %12s %12s\n", "label", "dump", "SVs", "load", "inrefs";
+   for my $r ( @all_results ) {
+      printf "%-12s %10s %10s %12s %12s\n",
+         $r->{label},
+         format_bytes( $r->{bytes} ),
+         $r->{heap_svs} // '?',
+         format_duration( $r->{phases}{load}{seconds} ),
+         format_duration( $r->{phases}{inrefs}{seconds} // 0 );
+   }
+}
+
+exit 0;
+
+sub parse_bytes {
+   my ( $s ) = @_;
+   if ( $s =~ /^(\d+(?:\.\d+)?)\s*([kKmMgG]i?B?)?$/ ) {
+      my ( $n, $u ) = ( $1, lc( $2 // '' ) );
+      return int( $n ) if $u eq '';
+      return int( $n * 1024 ) if $u =~ /^k/;
+      return int( $n * 1024**2 ) if $u =~ /^m/;
+      return int( $n * 1024**3 ) if $u =~ /^g/;
+   }
+   die "Bad --target-bytes value '$s'\n";
+}
+
+sub print_usage {
+   print <<'USAGE';
+Usage: run-bench [options]
+
+  --size, -s SPEC     Fixture tiers: default|quick|test|all|micro|small|
+                      medium|large|xlarge|huge|17G  (default: default → small)
+  --file PATH         Benchmark an existing .pmat instead of generating
+  --dir, -d DIR       Fixtures directory
+  --json, -j PATH     Write full results as JSON
+  --phases LIST       Comma list (default: load,inrefs,heap_walk,count,
+                      sizes_struct,reachability,identify)
+  --owned             Also run sizes_owned (sampled; expensive)
+  --force-gen         Regenerate fixtures
+  --target-bytes N    Override huge synthetic size (256M, 2G, 17G, ...)
+  --load-progress     Show load progress callbacks
+  --iterations, -n N  Repeat each job N times
+  --quiet, -q
+  --help, -h
+
+Environment:
+  PMAT_BENCH_SIZE     Default for --size
+  PMAT_FIXTURES       Fixtures directory
+  PMAT_HUGE_BYTES     Override huge target bytes
+
+Typical workflow:
+  ./Build
+  ./bench/gen-fixture            # micro + small
+  ./bench/run-bench              # quick iteration baseline
+  ./bench/run-bench --size=medium
+  ./bench/run-bench --file=/data/prod-17g.pmat --json=results/prod.json
+USAGE
+}
