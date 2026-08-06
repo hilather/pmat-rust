@@ -178,6 +178,7 @@ jobs:
           name: rocky8-failure-logs
           path: |
             MYMETA.*
-            blib/arch/**/*
-            dist/**
+            blib/arch/auto/Devel/MAT/**/*
+            dist/rpm/**
+            dist/rpmbuild/SPECS/**
           if-no-files-found: ignore

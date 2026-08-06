@@ -135,6 +135,12 @@ for f in LICENSE README README.md Changes \
   [[ -f "$ROOT/$f" ]] && install -m 0644 "$ROOT/$f" "$DOC/"
 done
 
+# Drop man pages from the package payload. rpm's brp-compress renames
+# Devel::MAT.3pm -> Devel::MAT.3pm.gz, which breaks a static %files list and
+# also confuses GitHub Actions artifact paths (colon in filename). POD remains
+# on the installed modules; user-facing docs are under /usr/share/doc.
+rm -rf "$BUILDROOT"/usr/share/man "$BUILDROOT"/usr/local/share/man 2>/dev/null || true
+
 echo "==> rpmbuild packaging"
 rm -rf "$RPMBUILD_TOP"
 mkdir -p "$RPMBUILD_TOP"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
