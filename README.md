@@ -41,10 +41,23 @@ available and links `libpmat_core` only into `Devel::MAT::Core`.
 ./bench/run-bench --size=small
 ```
 
-## CI
+## CI / Rocky 8 RPM
 
-GitHub Actions: **Rocky Linux 8** (`.github/workflows/ci-rocky8.yml`) — install
-toolchain, build Rust core, `./Build test`.
+GitHub Actions: **Rocky Linux 8** (`.github/workflows/ci-rocky8.yml`) — build
+Rust core, `./Build test` (perl + rust backends), then package an installable
+**`perl-Devel-MAT`** RPM (includes `libpmat_core.so`).
+
+- Artifacts: `rocky8-rpm` on every CI run
+- Tags `v*`: RPM attached to the GitHub Release
+
+Local package build (on EL8):
+
+```bash
+./packaging/rpm/build-rocky8.sh
+sudo dnf install ./dist/rpm/perl-Devel-MAT-*.el8.x86_64.rpm
+```
+
+See `packaging/README.md`.
 
 ## License
 

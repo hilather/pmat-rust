@@ -1,12 +1,16 @@
-# Build and test on Rocky Linux 8 (EL8) for Perl + Rust hybrid pmat-core.
+# Build, test, and package on Rocky Linux 8 (EL8) for Perl + Rust hybrid pmat-core.
 name: CI Rocky 8
 
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+
+permissions:
+  contents: write  # attach RPM assets to GitHub Releases on tags
 
 jobs:
   rocky8:
@@ -27,7 +31,8 @@ jobs:
             gcc gcc-c++ make git curl ca-certificates \
             perl perl-core perl-devel perl-ExtUtils-MakeMaker \
             perl-Test-Simple perl-Pod-Simple \
-            openssl-devel zlib-devel
+            openssl-devel zlib-devel \
+            rpm-build rpmdevtools binutils
           dnf clean all
           perl -v | head -4
 
@@ -49,7 +54,6 @@ jobs:
           curl -sL https://cpanmin.us | perl - App::cpanminus --notest
           export PATH="$HOME/perl5/bin:$PATH"
           export PERL5LIB="$HOME/perl5/lib/perl5${PERL5LIB:+:$PERL5LIB}"
-          # Install into workspace local/ for Build.PL / tests
           export PERL_MM_OPT="INSTALL_BASE=${GITHUB_WORKSPACE}/local"
           export PERL_MB_OPT="--install_base ${GITHUB_WORKSPACE}/local"
           mkdir -p "${GITHUB_WORKSPACE}/local"
@@ -70,7 +74,9 @@ jobs:
             XS::Parse::Keyword \
             Syntax::Keyword::Match \
             Term::Table \
-            Test2::V0
+            Test2::V0 \
+            Convert::Color \
+            Convert::Color::XTerm
           echo "PERL5LIB=${GITHUB_WORKSPACE}/local/lib/perl5${PERL5LIB:+:$PERL5LIB}" >> "$GITHUB_ENV"
           echo "${GITHUB_WORKSPACE}/local/bin" >> "$GITHUB_PATH"
           echo "$HOME/perl5/bin" >> "$GITHUB_PATH"
@@ -91,19 +97,81 @@ jobs:
           perl Build.PL
           ./Build
           ./Build test
-          # Forced-backend smokes
           PMAT_BACKEND=perl prove -Iblib/lib -Iblib/arch -Ilocal/lib/perl5 t/92-backend-modes.t
           if [[ -f blib/arch/auto/Devel/MAT/Core/Core.so ]]; then
             PMAT_BACKEND=rust perl -Iblib/lib -Iblib/arch -Ilocal/lib/perl5 \
               -MDevel::MAT::Core \
               -e 'die "core unavailable\n" unless Devel::MAT::Core->available; print "rust core ok\n"'
             PMAT_BACKEND=rust prove -Iblib/lib -Iblib/arch -Ilocal/lib/perl5 \
-              t/93-perl-rust-diff.t t/94-rust-core-api.t
+              t/93-perl-rust-diff.t t/94-rust-core-api.t t/95-parity-remaining.t
           else
             echo "WARNING: Core.so not built; Rust backend tests skipped" >&2
+            exit 1
           fi
 
-      - name: Upload artifacts on failure
+      - name: Derive package version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="0.54.1"
+            # dev builds: append short sha
+            if [[ "${GITHUB_REF_NAME:-}" != "v"* ]]; then
+              V="${V}+git.${GITHUB_SHA::7}"
+            fi
+          fi
+          # RPM versions cannot contain '+'; sanitize for RPM
+          RPM_V="$(echo "$V" | tr '+/' '--')"
+          echo "version=$RPM_V" >> "$GITHUB_OUTPUT"
+          echo "raw=$V" >> "$GITHUB_OUTPUT"
+          echo "Package version: $RPM_V"
+
+      - name: Build Rocky 8 RPM
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:${GITHUB_WORKSPACE}/local/bin:$HOME/perl5/bin:$PATH"
+          export PERL5LIB="${GITHUB_WORKSPACE}/local/lib/perl5${PERL5LIB:+:$PERL5LIB}"
+          # Tests already ran; skip second full suite inside packager for speed
+          export PMAT_RPM_SKIP_TEST=1
+          export PMAT_VERSION="${{ steps.ver.outputs.version }}"
+          export PMAT_RELEASE=1
+          export PMAT_DIST=.el8
+          chmod +x packaging/rpm/build-rocky8.sh
+          ./packaging/rpm/build-rocky8.sh
+          ls -la dist/rpm/
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocky8-rpm
+          path: |
+            dist/rpm/*.rpm
+            dist/rpm/libpmat_core.so
+          if-no-files-found: error
+
+      - name: Attach RPM to GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          # gh may be missing in the Rocky container — install official binary
+          if ! command -v gh >/dev/null 2>&1; then
+            curl -sL "https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz" \
+              | tar xz -C /tmp
+            install -m 0755 /tmp/gh_*/bin/gh /usr/local/bin/gh
+          fi
+          # Ensure release exists (created by earlier publish or create now)
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --notes "Automated Rocky 8 hybrid build."
+          fi
+          gh release upload "$TAG" dist/rpm/*.rpm dist/rpm/libpmat_core.so --clobber
+          gh release view "$TAG"
+
+      - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -111,4 +179,5 @@ jobs:
           path: |
             MYMETA.*
             blib/arch/**/*
+            dist/**
           if-no-files-found: ignore

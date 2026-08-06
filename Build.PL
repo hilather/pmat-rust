@@ -55,12 +55,23 @@ my $class = Module::Build->subclass(
    },
 );
 
+# Packaging may redirect link/search path and runtime rpath:
+#   PMAT_CORE_LIBDIR  — where to find libpmat_core at link time (default: cargo target)
+#   PMAT_CORE_RPATH   — DT_RUNPATH embedded in Core.so (default: same as LIBDIR)
+# For system RPMs set both to e.g. /usr/lib64 so Core.so finds the packaged .so.
+my $core_libdir = $ENV{PMAT_CORE_LIBDIR} // $rust_target;
+my $core_rpath  = $ENV{PMAT_CORE_RPATH}  // $core_libdir;
+
 my @core_link = $have_rust_lib ? (
-   "-L$rust_target",
+   "-L$core_libdir",
    "-l${libname}",
-   "-Wl,-rpath,$rust_target",
+   "-Wl,-rpath,$core_rpath",
    '-ldl', '-lpthread', '-lm',
 ) : ();
+
+if ( $have_rust_lib ) {
+   print "pmat-core link: -L$core_libdir -l$libname -Wl,-rpath,$core_rpath\n";
+}
 
 my $build = $class->new(
    module_name => 'Devel::MAT',
