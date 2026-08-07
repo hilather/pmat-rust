@@ -54,6 +54,10 @@ Default: **`rust`** (parity matrix complete). Use `PMAT_BACKEND=perl` for the 0.
 - Hot graph queries also expose **batch** native CSR edges (`outrefs_batch` /
   `inrefs_batch` / `type_counts`) for differential and future non-materializing paths.
 - `heap()` materializes all proxies when called (0.54 semantics).
+- **OPT-01 (lazy proxies):** forced-Rust load does **not** eagerly build every
+  heap proxy. Proxies are created on first `sv_at` / `rust_proxy_for_id` (one
+  cached proxy per ObjectId); `heap()` materializes the full set (0.54
+  semantics). See [performance.md](https://github.com/hilather/pmat-rust/blob/main/docs/performance.md).
 
 ## Persistent index (PAR-110)
 

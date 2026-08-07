@@ -47,7 +47,7 @@ Force the Rust path with PMAT_BACKEND=rust (or auto when preferred).
 %files
 %license LICENSE
 %doc README.md README Changes docs/ORACLE-0.54.md docs/architecture-hybrid.md
-%doc docs/parity/matrix.md
+%doc docs/parity/matrix.md docs/performance.md
 %{_bindir}/pmat
 %{_bindir}/pmat-cat-svpv
 %{_bindir}/pmat-counts

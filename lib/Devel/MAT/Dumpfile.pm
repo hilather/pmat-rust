@@ -155,8 +155,8 @@ sub load
    return $class->_load_perl( $path, %args );
 }
 
-# Forced-Rust path: parse via pmat-core, materialize full SV proxies so tools
-# (identify, sizes, reachability, plugins) match 0.54 oracle behaviour.
+# Forced-Rust path: parse via pmat-core; SV proxies are created on demand
+# (OPT-01). One strongly-cached proxy per ObjectId; heap() materializes all.
 sub _load_rust
 {
    my $class = shift;
@@ -196,6 +196,12 @@ sub _load_rust
       svx_sizes  => [],
       ctx_sizes  => [],
       _proxy_by_id => [],  # ObjectId => proxy for PAR-070 identity
+      # OPT-01: lazy proxies — heap map fills on demand; heap() completes it.
+      _rust_lazy           => 1,
+      _rust_heap_complete  => 0,
+      _rust_materialized   => 0,
+      _rust_no_fixup       => $args{no_fixup} ? 1 : 0,
+      _protosubs_indexed   => 0,
    }, $class;
 
    # Roots
@@ -216,31 +222,10 @@ sub _load_rust
       $self->{"${imm}_at"} = $addr;
    }
 
-   # Materialize heap SV proxies with full type payloads
-   $progress->( "Materializing SV proxies from rust core..." ) if $progress;
-   my $heap  = $self->{heap};
-   my $total = $core->heap_count;
-   for my $id ( 0 .. $total - 1 ) {
-      warn "DETAIL $id
-" if $ENV{PMAT_DEBUG_RUST};
-      my $detail = $core->object_detail($id) or next;
-      warn "MAKE $id type=$detail->{type}
-" if $ENV{PMAT_DEBUG_RUST};
-      my $sv = eval { _rust_make_sv_full( $self, $id, $detail ) };
-      if ($@) { warn "MAKE FAIL id=$id type=$detail->{type}: $@"; die $@ }
-      if ( $sv ) {
-         $heap->{ $detail->{addr} } = $sv;
-         $self->{_proxy_by_id}[$id] = $sv;
-      }
-      $progress->( sprintf "Materializing %d of %d (%.2f%%)",
-         $id + 1, $total, 100 * ( $id + 1 ) / ( $total || 1 ) )
-         if $progress && ( ( $id + 1 ) % 20000 ) == 0;
-   }
-
-   # Stack
+   # Stack addresses only (proxies on demand via stack() / sv_at)
    $self->{stack_at} = [ @{ $core->stack // [] } ];
 
-   # Mortals
+   # Mortals: materialize only the mortal set (typically small)
    my $mortals = $core->mortals // [];
    if ( @$mortals ) {
       $self->{mortals_at} = [ @$mortals ];
@@ -277,7 +262,7 @@ sub _load_rust
    }
    $self->{contexts} = \@contexts;
 
-   # Depth fixup for SUB contexts (format_minor >= 2)
+   # Depth fixup for SUB contexts (format_minor >= 2) — materializes CVs used
    if ( $self->{format_minor} >= 2 ) {
       my %prev_depth_by_cvaddr;
       foreach my $ctx ( @contexts ) {
@@ -289,33 +274,182 @@ sub _load_rust
       }
    }
 
-   # Root name annotations
+   # Root name annotations (materializes root SVs only)
    foreach my $name ( keys %$roots ) {
       my $sv = $self->root( $name ) or next;
       $sv->{rootname} = $name;
    }
 
-   # Protosubs by oproot (must exist before fixup links clones)
-   my $protosubs = $self->{protosubs_by_oproot} = {};
-   for my $sv ( values %$heap ) {
-      next unless $sv->type eq 'CODE' and $sv->can('oproot') and $sv->oproot and $sv->is_clone;
-      $protosubs->{ $sv->oproot } = $sv;
-   }
-
-   # Fixups (PADLIST/PADNAMES reclass, glob_at, protosub, ithread consts)
-   $self->_fixup( %args ) unless $args{no_fixup};
+   # Protosubs / full-heap fixup deferred until each proxy is first materialized
+   # (or heap() forces full materialize). no_fixup skips per-SV _fixup.
 
    $progress->() if $progress;
    return $self;
 }
 
-# One strongly-cached proxy per ObjectId (PAR-070).
+# Sentinel from pmat_id_for_addr when address is not in the dump.
+use constant _RUST_ID_NONE => 0xFFFFFFFF;
+
+# One strongly-cached proxy per ObjectId (PAR-070). Materializes on demand.
 sub rust_proxy_for_id
 {
    my $self = shift;
    my ( $id ) = @_;
+   return undef unless defined $id;
    return $self->{_proxy_by_id}[$id] if defined $self->{_proxy_by_id}[$id];
-   return undef;
+   return $self->_rust_materialize_id( $id );
+}
+
+# How many heap proxies have been built so far (tests / diagnostics).
+sub rust_materialized_count
+{
+   my $self = shift;
+   return $self->{_rust_materialized} // scalar grep { defined } @{ $self->{_proxy_by_id} // [] };
+}
+
+sub rust_heap_complete
+{
+   my $self = shift;
+   return $self->{_rust_heap_complete} ? 1 : 0;
+}
+
+# Materialize every heap ObjectId (0.54 heap() semantics) and run full fixup.
+sub _rust_materialize_all
+{
+   my $self = shift;
+   my %args = @_;
+
+   return $self if $self->{_rust_heap_complete};
+
+   my $core = $self->{rust_core} or return $self;
+   my $total = $core->heap_count;
+   my $progress = $args{progress};
+
+   $progress->( "Materializing SV proxies from rust core..." ) if $progress;
+
+   # First pass: create all proxies without per-SV fixup so GLOB→slot links
+   # can be applied after every SV exists (matches eager 0.54 order).
+   local $self->{_rust_defer_fixup} = 1;
+   for my $id ( 0 .. $total - 1 ) {
+      $self->_rust_materialize_id( $id );
+      $progress->( sprintf "Materializing %d of %d (%.2f%%)",
+         $id + 1, $total, 100 * ( $id + 1 ) / ( $total || 1 ) )
+         if $progress && ( ( $id + 1 ) % 20000 ) == 0;
+   }
+
+   # Build protosub index from fully populated heap, then fixup.
+   unless ( $self->{_rust_no_fixup} || $args{no_fixup} ) {
+      my $protosubs = $self->{protosubs_by_oproot} ||= {};
+      for my $sv ( values %{ $self->{heap} } ) {
+         next unless $sv->type eq 'CODE' and $sv->can('oproot') and $sv->oproot and $sv->is_clone;
+         $protosubs->{ $sv->oproot } = $sv;
+      }
+      $self->{_protosubs_indexed} = 1;
+      $self->_fixup( %args );
+   }
+
+   $self->{_rust_heap_complete} = 1;
+   $progress->() if $progress;
+   return $self;
+}
+
+# Ensure CODE protosubs (CvCLONE) are indexed for a given oproot.
+sub _rust_ensure_protosub
+{
+   my $self = shift;
+   my ( $oproot ) = @_;
+   return $self->{protosubs_by_oproot}{$oproot}
+      if $oproot && $self->{protosubs_by_oproot}{$oproot};
+
+   return undef unless $oproot;
+   $self->_rust_index_protosubs;
+   return $self->{protosubs_by_oproot}{$oproot};
+}
+
+sub _rust_index_protosubs
+{
+   my $self = shift;
+   return if $self->{_protosubs_indexed};
+
+   my $core = $self->{rust_core} or return;
+   my $total = $core->heap_count;
+   my $protosubs = $self->{protosubs_by_oproot} ||= {};
+
+   for my $id ( 0 .. $total - 1 ) {
+      my $row = $core->object_at($id) or next;
+      next unless ( $row->[1] // 0 ) == 7;  # CODE
+      # Prefer already-materialized proxy; else peek header flags.
+      if ( my $sv = $self->{_proxy_by_id}[$id] ) {
+         if ( $sv->type eq 'CODE' and $sv->oproot and $sv->is_clone ) {
+            $protosubs->{ $sv->oproot } = $sv;
+         }
+         next;
+      }
+      my $d = $core->object_detail($id) or next;
+      my $header = $d->{header} // '';
+      next unless length $header;
+      my ( $line, $flags, $oproot ) = ( 0, 0, 0 );
+      eval {
+         ( $line, $flags, $oproot ) =
+            unpack "$self->{uint_fmt} C $self->{ptr_fmt}", $header;
+      };
+      next unless $flags && ( $flags & 0x01 ) && $oproot;  # is_clone
+      # Materialize this protosub only (no recursive protosub index).
+      local $self->{_protosubs_indexing} = 1;
+      my $sv = $self->_rust_materialize_id( $id );
+      $protosubs->{$oproot} = $sv if $sv;
+   }
+
+   $self->{_protosubs_indexed} = 1;
+}
+
+sub _rust_materialize_id
+{
+   my $self = shift;
+   my ( $id ) = @_;
+
+   return undef unless defined $id;
+   return $self->{_proxy_by_id}[$id] if defined $self->{_proxy_by_id}[$id];
+
+   my $core = $self->{rust_core} or return undef;
+   my $total = $core->heap_count;
+   return undef if $id >= $total && $id >= ( $core->can('object_count') ? $core->object_count : $total );
+
+   warn "DETAIL $id\n" if $ENV{PMAT_DEBUG_RUST};
+   my $detail = $core->object_detail($id);
+   return undef unless $detail;
+   warn "MAKE $id type=$detail->{type}\n" if $ENV{PMAT_DEBUG_RUST};
+
+   my $sv = eval { _rust_make_sv_full( $self, $id, $detail ) };
+   if ($@) {
+      warn "MAKE FAIL id=$id type=$detail->{type}: $@";
+      die $@;
+   }
+   return undef unless $sv;
+
+   $self->{heap}{ $detail->{addr} } = $sv;
+   $self->{_proxy_by_id}[$id] = $sv;
+   $self->{_rust_materialized}++;
+
+   # Register protosubs as we see them (cheap when partial materialize).
+   if ( $sv->type eq 'CODE' and $sv->can('oproot') and $sv->oproot and $sv->is_clone ) {
+      $self->{protosubs_by_oproot}{ $sv->oproot } = $sv;
+   }
+
+   # Per-SV fixup (PADLIST reclass, glob_at, protosub link, …) unless deferred.
+   unless ( $self->{_rust_no_fixup} || $self->{_rust_defer_fixup} ) {
+      if ( $sv->type eq 'CODE' and $sv->can('is_cloned') and $sv->is_cloned and $sv->oproot
+           and !$self->{_protosubs_indexing} ) {
+         $self->_rust_ensure_protosub( $sv->oproot );
+      }
+      $sv->_fixup if $sv->can('_fixup');
+   }
+
+   if ( $self->{_rust_materialized} >= $total ) {
+      $self->{_rust_heap_complete} = 1;
+   }
+
+   return $sv;
 }
 
 sub _rust_make_sv_full
@@ -1274,6 +1408,9 @@ Returns all of the heap-allocated SVs, in no particular order
 sub heap
 {
    my $self = shift;
+   # OPT-01: forced-Rust loads lazily; heap() still returns the full set.
+   $self->_rust_materialize_all if $self->{backend} && $self->{backend} eq 'rust'
+      && $self->{rust_core} && !$self->{_rust_heap_complete};
    return values %{ $self->{heap} };
 }
 
@@ -1328,7 +1465,17 @@ sub sv_at
    return $self->{YES}   if $addr == $self->{yes_at};
    return $self->{NO}    if $addr == $self->{no_at};
 
-   return $self->{heap}{$addr};
+   my $sv = $self->{heap}{$addr};
+   return $sv if $sv;
+
+   # OPT-01: on-demand materialize from rust dense model
+   if ( $self->{backend} && $self->{backend} eq 'rust' && $self->{rust_core} ) {
+      my $id = $self->{rust_core}->id_for_addr($addr);
+      return undef if !defined $id || $id == _RUST_ID_NONE;
+      return $self->_rust_materialize_id($id);
+   }
+
+   return undef;
 }
 
 =head1 AUTHOR

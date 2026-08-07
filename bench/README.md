@@ -149,3 +149,6 @@ in a temp dir — suitable for CI. It does **not** build large tiers.
 3. `./bench/run-bench --json=bench/results/after.json`
 4. Compare `phases.load.seconds`, `phases.inrefs.seconds`, RSS peak
 5. Periodically promote: `--size=medium` → `large` → `--file=prod.pmat` / `--size=17G`
+
+Committed baseline table and prioritized OPT backlog:
+[docs/performance.md](https://github.com/hilather/pmat-rust/blob/main/docs/performance.md).

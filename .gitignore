@@ -22,6 +22,9 @@ fixtures/*.pmat
 fixtures/*.pmat.idx
 fixtures/*.meta.json
 bench/results/*.json
+# Committed baseline snapshots (pre-optimization reference numbers)
+!bench/results/baseline/
+!bench/results/baseline/**
 !bench/results/.gitkeep
 !fixtures/.gitkeep
 

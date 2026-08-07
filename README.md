@@ -101,7 +101,7 @@ Tools load as pluggable `Devel::MAT::Tool::*` modules — extend the shell witho
 
 ### Parity-first engineering
 
-**All** external 0.54 parity gates (including **PAR-110** persistent index) are **`pass`** under `PMAT_BACKEND=rust`. Track status in [`docs/parity/matrix.md`](docs/parity/matrix.md). Architecture notes: [`docs/architecture-hybrid.md`](docs/architecture-hybrid.md).
+**All** external 0.54 parity gates (including **PAR-110** persistent index) are **`pass`** under `PMAT_BACKEND=rust`. Track status in [`docs/parity/matrix.md`](docs/parity/matrix.md). Architecture notes: [`docs/architecture-hybrid.md`](docs/architecture-hybrid.md). Performance baselines and the optimization backlog: [`docs/performance.md`](docs/performance.md).
 
 ### Benchmarks & fixtures
 
@@ -392,6 +392,7 @@ Notable test groups:
 | [UserGuide (POD)](lib/Devel/MAT/UserGuide.pod) | Capture + analysis introduction |
 | [architecture-hybrid.md](docs/architecture-hybrid.md) | Layer diagram, dense model, backends |
 | [parity/matrix.md](docs/parity/matrix.md) | Feature-parity gate table |
+| [performance.md](docs/performance.md) | Baselines + OPT-01…OPT-12 backlog |
 | [ORACLE-0.54.md](docs/ORACLE-0.54.md) | Version pin & rules of engagement |
 | [agent-bundle/](docs/agent-bundle/) | Executive plan, workplan, release gates |
 | [doc/format.txt](doc/format.txt) | Binary dump format |

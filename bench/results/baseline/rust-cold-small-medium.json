@@ -1,0 +1,147 @@
+{
+   "created_unix" : 1786062210.47302,
+   "results" : [
+      {
+         "bytes" : 11482478,
+         "fixture_meta" : {
+            "bytes" : 11482478,
+            "created_unix" : 1786062137.07603,
+            "dumper" : "0.52",
+            "generate_rss_kb" : 20440,
+            "generate_s" : 0.036742,
+            "heap_svs" : 143319,
+            "method" : "dumper",
+            "nodes" : 5000,
+            "path" : "/home/mbrewer/projects/pmat-rust/fixtures/small-mixed-n5000.pmat",
+            "perl" : "5.038002",
+            "shape" : "mixed",
+            "tier" : "small"
+         },
+         "heap_svs" : 143319,
+         "host" : {
+            "mat" : "0.54",
+            "perl" : "5.038002",
+            "rss_kb_end" : 275012,
+            "rss_kb_peak" : 275012,
+            "rss_kb_start" : 18552
+         },
+         "iteration" : 1,
+         "label" : "small",
+         "path" : "/home/mbrewer/projects/pmat-rust/fixtures/small-mixed-n5000.pmat",
+         "phases" : {
+            "count" : {
+               "rss_delta_kb" : 16,
+               "rss_kb" : 261272,
+               "seconds" : 0.314648,
+               "svs_per_s" : 455489.944318731
+            },
+            "identify" : {
+               "rss_delta_kb" : 6056,
+               "rss_kb" : 275012,
+               "seconds" : 0.256619,
+               "target_addr" : "0x5e4d91d24368",
+               "target_desc" : "SCALAR(PV)"
+            },
+            "inrefs" : {
+               "rss_delta_kb" : 68876,
+               "rss_kb" : 261252,
+               "seconds" : 1.070604,
+               "svs_per_s" : 133867.424369795
+            },
+            "load" : {
+               "bytes_per_s" : 7822778.7217286,
+               "heap_svs" : 143319,
+               "rss_delta_kb" : 171844,
+               "rss_kb" : 190396,
+               "seconds" : 1.467826,
+               "svs_per_s" : 97640.3197654218
+            },
+            "reachability" : {
+               "rss_delta_kb" : 4724,
+               "rss_kb" : 266416,
+               "seconds" : 0.421785,
+               "svs_per_s" : 339791.599985775
+            },
+            "sizes_struct" : {
+               "rss_delta_kb" : 416,
+               "rss_kb" : 261688,
+               "seconds" : 0.315046,
+               "svs_per_s" : 454914.52041924
+            }
+         },
+         "tier" : "small",
+         "total_s" : 3.846528
+      },
+      {
+         "bytes" : 51734225,
+         "fixture_meta" : {
+            "bytes" : 51734225,
+            "created_unix" : 1786062139.32077,
+            "dumper" : "0.52",
+            "generate_rss_kb" : 118236,
+            "generate_s" : 0.193735,
+            "heap_svs" : 665769,
+            "method" : "dumper",
+            "nodes" : 25000,
+            "path" : "/home/mbrewer/projects/pmat-rust/fixtures/medium-mixed-n25000.pmat",
+            "perl" : "5.038002",
+            "shape" : "mixed",
+            "tier" : "medium"
+         },
+         "heap_svs" : 665769,
+         "host" : {
+            "mat" : "0.54",
+            "perl" : "5.038002",
+            "rss_kb_end" : 1403660,
+            "rss_kb_peak" : 1403660,
+            "rss_kb_start" : 275012
+         },
+         "iteration" : 1,
+         "label" : "medium",
+         "path" : "/home/mbrewer/projects/pmat-rust/fixtures/medium-mixed-n25000.pmat",
+         "phases" : {
+            "count" : {
+               "rss_delta_kb" : 0,
+               "rss_kb" : 1349756,
+               "seconds" : 1.54532,
+               "svs_per_s" : 430829.213366811
+            },
+            "identify" : {
+               "rss_delta_kb" : 26292,
+               "rss_kb" : 1403660,
+               "seconds" : 1.314305,
+               "target_addr" : "0x5e4d95610b30",
+               "target_desc" : "SCALAR(PV)"
+            },
+            "inrefs" : {
+               "rss_delta_kb" : 324704,
+               "rss_kb" : 1349756,
+               "seconds" : 5.047519,
+               "svs_per_s" : 131900.246437903
+            },
+            "load" : {
+               "bytes_per_s" : 7596451.11863401,
+               "heap_svs" : 665769,
+               "rss_delta_kb" : 750040,
+               "rss_kb" : 1025052,
+               "seconds" : 6.810315,
+               "svs_per_s" : 97758.9142352446
+            },
+            "reachability" : {
+               "rss_delta_kb" : 17936,
+               "rss_kb" : 1367916,
+               "seconds" : 2.06136,
+               "svs_per_s" : 322975.608336244
+            },
+            "sizes_struct" : {
+               "rss_delta_kb" : 224,
+               "rss_kb" : 1349980,
+               "seconds" : 1.577978,
+               "svs_per_s" : 421912.726286425
+            }
+         },
+         "tier" : "medium",
+         "total_s" : 18.356797
+      }
+   ]
+}
