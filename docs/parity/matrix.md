@@ -21,7 +21,7 @@ Comparison modes: `exact` · `structured_exact` · `semantic_multiset` (only whe
 | PAR-080 | Plugin discovery / tool_* | exact | pass | pass | available_tools + load_tool under forced rust |
 | PAR-090 | Companion scripts (6 exes) | exact | pass | pass | pmat -q summary/count + companions invoked under rust |
 | PAR-100 | Malformed dumps | exact | pass | pass | truncated dump errors under forced rust; t/95 |
-| PAR-110 | Persistent `.pmat.idx` | exact | n/a | wip | later phase (deferred) |
+| PAR-110 | Persistent `.pmat.idx` | exact | n/a | pass | versioned sidecar; digest+CRC; t/96; `PMAT_IDX=0` disables |
 | PAR-120 | TTY goldens | exact | pass | pass | non-TTY one-shot gated; Cmd::Terminal present; t/95 |
 
 ## Backend test rule

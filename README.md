@@ -22,6 +22,7 @@
   │  C ABI (panic-contained)  load · counts · batch edges    │
   ├──────────────────────────────────────────────────────────┤
   │  pmat-core (Rust)  dense ObjectId model · CSR graphs     │
+  │                   optional .pmat.idx sidecar (PAR-110)   │
   └──────────────────────────────────────────────────────────┘
 ```
 
@@ -95,13 +96,12 @@ Tools load as pluggable `Devel::MAT::Tool::*` modules — extend the shell witho
 - **Dense `ObjectId` (`u32`)** model, address→id map, CSR-style forward & reverse edges
 - **Batch graph APIs** — `type_counts`, `outrefs_batch`, `inrefs_batch`
 - Full SV materialization for Identify / Sizes / Reachability / plugins under forced Rust
+- **Persistent `.pmat.idx`** (PAR-110) — versioned sidecar after successful Rust load; validated by content digest + CRC; never mutates the `.pmat`
 - Format: **major 0, minor ≤ 6** ([`doc/format.txt`](doc/format.txt))
 
 ### Parity-first engineering
 
-Nearly all parity gates vs 0.54 are **pass** under `PMAT_BACKEND=rust` (load, counts, summary, edges, identify, sizes, reachability, tools, companions, malformed dumps). Deferred: persistent `.pmat.idx` indexing.
-
-Track status in [`docs/parity/matrix.md`](docs/parity/matrix.md). Architecture notes: [`docs/architecture-hybrid.md`](docs/architecture-hybrid.md).
+**All** external 0.54 parity gates (including **PAR-110** persistent index) are **`pass`** under `PMAT_BACKEND=rust`. Track status in [`docs/parity/matrix.md`](docs/parity/matrix.md). Architecture notes: [`docs/architecture-hybrid.md`](docs/architecture-hybrid.md).
 
 ### Benchmarks & fixtures
 
@@ -210,24 +210,41 @@ Control the dump loader with **`PMAT_BACKEND`**:
 
 | Mode | Behavior |
 |------|----------|
-| **`perl`** (default) | Forced 0.54 Perl/XS path — **oracle** |
-| **`rust`** | Forced Rust parse + dense graph. Hard error if `pmat-core` is missing. **No silent fallback.** |
+| **`rust`** (default) | Forced Rust parse + dense graph. Hard error if `pmat-core` is missing. **No silent fallback.** |
+| **`perl`** | Forced 0.54 Perl/XS path — **oracle** |
 | **`auto`** | Prefer Rust when the native library is available; otherwise Perl. Auto fallback **must not** count as a Rust pass in tests. |
 
 ```bash
-# Oracle path (default)
+# Default is rust when Core is linked (unset PMAT_BACKEND)
+./bin/pmat -q file.pmat summary
+
+# Explicit oracle path
 export PMAT_BACKEND=perl
 ./bin/pmat -q file.pmat summary
 
-# Forced Rust smoke (after successful Core.so link)
-export PMAT_BACKEND=rust
-perl -Iblib/lib -Iblib/arch bin/pmat -q path/to/file.pmat summary
-
-# Prefer Rust when built
+# Prefer Rust when built, fall back to Perl if not
 export PMAT_BACKEND=auto
 ```
 
 Resolution logic lives in [`lib/Devel/MAT/Backend.pm`](lib/Devel/MAT/Backend.pm).
+
+### Persistent index (`PMAT_IDX`)
+
+Under the Rust load path, pmat-core may write **`<dump>.pmat.idx`** beside the dump (schema v1). A later open reuses it only when magic/schema, source size, content digest, and payload CRC all match; otherwise it full-parses and rewrites the sidecar.
+
+| Variable | Behavior |
+|----------|----------|
+| *(unset)* / `PMAT_IDX=1` | Index read/write enabled (default on Rust path) |
+| `PMAT_IDX=0` / `false` / `off` / `no` | Skip index entirely |
+
+```bash
+# Second open can use the sidecar (probe via Core API)
+PMAT_BACKEND=rust perl -Iblib/lib -Iblib/arch -MDevel::MAT::Core -e '
+  my $p = shift;
+  Devel::MAT::Core->load($p);
+  print "used_index=", Devel::MAT::Core::last_load_used_index(), "\n";
+' path/to/file.pmat
+```
 
 ---
 
@@ -297,10 +314,10 @@ New users: start with the POD guide [`Devel::MAT::UserGuide`](lib/Devel/MAT/User
 pmat-rust/
 ├── bin/                 # pmat + companion CLIs
 ├── lib/Devel/MAT/       # Perl API, tools, Dumpfile, Backend, Core XS
-├── rust/pmat-core/      # Dense parser + graph + C ABI
-│   ├── src/{lib,parse,ffi}.rs
+├── rust/pmat-core/      # Dense parser + graph + C ABI + .pmat.idx
+│   ├── src/{lib,parse,ffi,index}.rs
 │   └── include/pmat_core.h
-├── t/                   # Oracle + parity + backend tests
+├── t/                   # Oracle + parity + backend + index tests
 ├── bench/               # Fixture generator + benchmark harness
 ├── fixtures/            # Generated dumps (local; gitkept)
 ├── packaging/rpm/       # Rocky 8 RPM spec + build script
@@ -355,6 +372,7 @@ Notable test groups:
 | `t/90`–`t/91` | Fixtures & bench CLI |
 | `t/92` | Backend mode selection |
 | `t/93`–`t/95` | Perl↔Rust differential & remaining parity |
+| `t/96` | Persistent `.pmat.idx` (PAR-110) |
 | `t/99` | POD |
 
 **CI (Rocky Linux 8):** [`.github/workflows/ci-rocky8.yml`](.github/workflows/ci-rocky8.yml)
@@ -390,6 +408,7 @@ Notable test groups:
 4. **Dense native model first** — layout and algorithms deliver more than a pure language rewrite.
 5. **Safe FFI** — panic-contained C ABI; no one-FFI-call-per-edge hot loops.
 6. **Never mutate** the source `.pmat` file.
+7. **Never trust an unvalidated index** — schema, source digest, and payload CRC must all match before reuse.
 
 ---
 
@@ -398,11 +417,11 @@ Notable test groups:
 | Area | State |
 |------|--------|
 | Perl/XS oracle path | Default, fully supported |
-| Rust load + dense graph | Forced mode; parity rows largely **pass** |
+| Rust load + dense graph | Forced mode; **all** external parity rows **pass** |
 | Batch CSR edge / count APIs | Available on Rust path |
-| EL8 RPM packaging | CI + local build script |
-| Persistent `.pmat.idx` | **WIP** (deferred) |
-| Default backend | Still **`perl`** until promotion criteria are met |
+| EL8 RPM packaging | CI + local build script; release assets on tags |
+| Persistent `.pmat.idx` | **pass** (schema v1, digest+CRC; `PMAT_IDX=0` disables) |
+| Default backend | **`rust`** (use `PMAT_BACKEND=perl` for oracle) |
 
 This is a **hybrid modernization** of Devel-MAT 0.54, not a drop-in CPAN re-release under a new name. Upstream author: Paul Evans (`PEVANS`). Hybrid work lives in this repository.
 

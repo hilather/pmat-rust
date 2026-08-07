@@ -17,7 +17,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-VERSION="${PMAT_VERSION:-0.54.1}"
+VERSION="${PMAT_VERSION:-0.55.0}"
 RELEASE="${PMAT_RELEASE:-1}"
 DIST_TAG="${PMAT_DIST:-.el8}"
 ARCH="$(uname -m)"
@@ -38,6 +38,14 @@ need gcc
 need cargo
 need rpmbuild
 need curl
+
+# RPM Version cannot contain '-' (Illegal char). Put git metadata in Release.
+if [[ "$VERSION" == *-* ]]; then
+  die "PMAT_VERSION must not contain '-': '$VERSION' (use Release for git suffixes)"
+fi
+if [[ ! "$VERSION" =~ ^[0-9][0-9A-Za-z._+~]*$ ]]; then
+  die "PMAT_VERSION is not RPM-safe: '$VERSION'"
+fi
 
 echo "==> Version ${VERSION}-${RELEASE}${DIST_TAG} arch=${ARCH}"
 

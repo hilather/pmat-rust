@@ -28,8 +28,15 @@ typedef struct pmat_dump pmat_dump;
 #define PMAT_STRENGTH_INDIRECT 4
 #define PMAT_STRENGTH_INFERRED 8
 
-/* Load a dump file. On success *out is non-NULL. Does not modify the file. */
+/* Load a dump file. On success *out is non-NULL. Does not modify the file.
+ * Prefers a validated .pmat.idx sidecar when PMAT_IDX is enabled (default). */
 int pmat_load(const char *path, pmat_dump **out);
+/* Full parse only; rewrites index when enabled. */
+int pmat_load_full_parse(const char *path, pmat_dump **out);
+/* 1 if last successful pmat_load used a validated index. */
+int pmat_last_load_used_index(void);
+/* Write sidecar path for dump into buf (NUL-terminated). */
+int pmat_index_path(const char *dump_path, char *buf, size_t buflen);
 
 /* Free a dump handle (NULL-safe). */
 void pmat_free(pmat_dump *dump);

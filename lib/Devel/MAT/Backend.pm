@@ -23,9 +23,9 @@ Controls which dump loader is used. Environment variable C<PMAT_BACKEND>:
 
 =over 4
 
-=item * C<perl> (default) — forced 0.54 Perl/XS path (oracle)
+=item * C<rust> (default) — forced Rust C ABI path; B<never> silently falls back to Perl
 
-=item * C<rust> — forced Rust C ABI path; B<never> silently falls back to Perl
+=item * C<perl> — forced 0.54 Perl/XS path (oracle)
 
 =item * C<auto> — prefer Rust when available, otherwise Perl. Fallback must not
 be counted as a Rust pass in tests.
@@ -42,7 +42,8 @@ sub env_name { 'PMAT_BACKEND' }
 
 sub mode {
    my $key = env_name();
-   my $raw = $ENV{$key} // 'perl';
+   # Default: rust (parity complete). Use PMAT_BACKEND=perl for the oracle path.
+   my $raw = $ENV{$key} // 'rust';
    $raw = lc $raw;
    $raw =~ s/^\s+|\s+$//g;
    return $raw if $raw eq 'perl' || $raw eq 'rust' || $raw eq 'auto';

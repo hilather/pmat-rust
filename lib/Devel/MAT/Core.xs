@@ -13,6 +13,9 @@
 typedef struct pmat_dump pmat_dump;
 
 extern int pmat_load(const char *path, pmat_dump **out);
+extern int pmat_load_full_parse(const char *path, pmat_dump **out);
+extern int pmat_last_load_used_index(void);
+extern int pmat_index_path(const char *dump_path, char *buf, size_t buflen);
 extern void pmat_free(pmat_dump *dump);
 extern uint32_t pmat_heap_count(const pmat_dump *dump);
 extern uint32_t pmat_object_count(const pmat_dump *dump);
@@ -144,6 +147,47 @@ _xs_load(path)
     h->dump = dump;
     RETVAL = newSV(0);
     sv_setref_pv(RETVAL, "Devel::MAT::Core::Handle", (void *)h);
+  OUTPUT:
+    RETVAL
+
+SV *
+_xs_load_full_parse(path)
+    const char *path
+  PREINIT:
+    pmat_dump *dump = NULL;
+    pmat_handle *h;
+    int rc;
+  CODE:
+    rc = pmat_load_full_parse(path, &dump);
+    if (rc != 0 || !dump) {
+      const char *err = pmat_last_error();
+      croak("pmat_load_full_parse failed (%d): %s", rc, err ? err : "unknown");
+    }
+    Newx(h, 1, pmat_handle);
+    h->dump = dump;
+    RETVAL = newSV(0);
+    sv_setref_pv(RETVAL, "Devel::MAT::Core::Handle", (void *)h);
+  OUTPUT:
+    RETVAL
+
+int
+last_load_used_index()
+  CODE:
+    RETVAL = pmat_last_load_used_index();
+  OUTPUT:
+    RETVAL
+
+SV *
+index_path_for(path)
+    const char *path
+  PREINIT:
+    char buf[4096];
+    int rc;
+  CODE:
+    rc = pmat_index_path(path, buf, sizeof(buf));
+    if (rc != 0)
+      croak("pmat_index_path failed: %s", pmat_last_error());
+    RETVAL = newSVpv(buf, 0);
   OUTPUT:
     RETVAL
 

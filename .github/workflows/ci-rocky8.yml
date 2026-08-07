@@ -12,16 +12,24 @@ on:
 permissions:
   contents: write  # attach RPM assets to GitHub Releases on tags
 
+env:
+  CARGO_TERM_COLOR: always
+  # Stable paths inside the Rocky container job
+  PERL_LOCAL: ${{ github.workspace }}/local
+
 jobs:
   rocky8:
     name: Rocky Linux 8
     runs-on: ubuntu-latest
     container:
       image: rockylinux:8
+      # Keep PATH simple; we re-export every step
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install system packages (Rocky 8)
         run: |
@@ -32,18 +40,19 @@ jobs:
             perl perl-core perl-devel perl-ExtUtils-MakeMaker \
             perl-Test-Simple perl-Pod-Simple \
             openssl-devel zlib-devel \
-            rpm-build rpmdevtools binutils
+            rpm-build rpmdevtools binutils findutils
           dnf clean all
           perl -v | head -4
+          rpmbuild --version
 
       - name: Install Rust (stable)
         run: |
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --default-toolchain stable --profile minimal
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           # shellcheck source=/dev/null
           source "$HOME/.cargo/env"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           rustc --version
           cargo --version
 
@@ -52,12 +61,9 @@ jobs:
           set -euo pipefail
           export PATH="$HOME/.cargo/bin:$PATH"
           curl -sL https://cpanmin.us | perl - App::cpanminus --notest
-          export PATH="$HOME/perl5/bin:$PATH"
-          export PERL5LIB="$HOME/perl5/lib/perl5${PERL5LIB:+:$PERL5LIB}"
-          export PERL_MM_OPT="INSTALL_BASE=${GITHUB_WORKSPACE}/local"
-          export PERL_MB_OPT="--install_base ${GITHUB_WORKSPACE}/local"
-          mkdir -p "${GITHUB_WORKSPACE}/local"
-          cpanm --notest --local-lib-contained "${GITHUB_WORKSPACE}/local" \
+          export PATH="$HOME/perl5/bin:${{ env.PERL_LOCAL }}/bin:$PATH"
+          mkdir -p "${{ env.PERL_LOCAL }}"
+          cpanm --notest --local-lib-contained "${{ env.PERL_LOCAL }}" \
             Module::Build \
             ExtUtils::CBuilder \
             ExtUtils::CChecker \
@@ -77,70 +83,95 @@ jobs:
             Test2::V0 \
             Convert::Color \
             Convert::Color::XTerm
-          echo "PERL5LIB=${GITHUB_WORKSPACE}/local/lib/perl5${PERL5LIB:+:$PERL5LIB}" >> "$GITHUB_ENV"
-          echo "${GITHUB_WORKSPACE}/local/bin" >> "$GITHUB_PATH"
-          echo "$HOME/perl5/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          {
+            echo "PERL5LIB=${{ env.PERL_LOCAL }}/lib/perl5${PERL5LIB:+:$PERL5LIB}"
+            echo "${{ env.PERL_LOCAL }}/bin"
+            echo "$HOME/perl5/bin"
+            echo "$HOME/.cargo/bin"
+          } >> "$GITHUB_PATH"
+          echo "PERL5LIB=${{ env.PERL_LOCAL }}/lib/perl5" >> "$GITHUB_ENV"
 
       - name: Cargo build pmat-core (release)
         run: |
           set -euo pipefail
           export PATH="$HOME/.cargo/bin:$PATH"
           cargo build --release --manifest-path rust/pmat-core/Cargo.toml
+          test -f rust/pmat-core/target/release/libpmat_core.so
           ls -la rust/pmat-core/target/release/libpmat_core.*
 
       - name: Perl Build + test
         run: |
           set -euo pipefail
-          export PATH="$HOME/.cargo/bin:${GITHUB_WORKSPACE}/local/bin:$HOME/perl5/bin:$PATH"
-          export PERL5LIB="${GITHUB_WORKSPACE}/local/lib/perl5${PERL5LIB:+:$PERL5LIB}"
+          export PATH="$HOME/.cargo/bin:${{ env.PERL_LOCAL }}/bin:$HOME/perl5/bin:$PATH"
+          export PERL5LIB="${{ env.PERL_LOCAL }}/lib/perl5${PERL5LIB:+:$PERL5LIB}"
           perl Build.PL
           ./Build
+          # Full suite under default backend (now rust when Core is linked)
           ./Build test
+          # Explicit oracle + rust parity smokes
           PMAT_BACKEND=perl prove -Iblib/lib -Iblib/arch -Ilocal/lib/perl5 t/92-backend-modes.t
-          if [[ -f blib/arch/auto/Devel/MAT/Core/Core.so ]]; then
-            PMAT_BACKEND=rust perl -Iblib/lib -Iblib/arch -Ilocal/lib/perl5 \
-              -MDevel::MAT::Core \
-              -e 'die "core unavailable\n" unless Devel::MAT::Core->available; print "rust core ok\n"'
-            PMAT_BACKEND=rust prove -Iblib/lib -Iblib/arch -Ilocal/lib/perl5 \
-              t/93-perl-rust-diff.t t/94-rust-core-api.t t/95-parity-remaining.t
-          else
-            echo "WARNING: Core.so not built; Rust backend tests skipped" >&2
-            exit 1
-          fi
+          test -f blib/arch/auto/Devel/MAT/Core/Core.so
+          PMAT_BACKEND=rust perl -Iblib/lib -Iblib/arch -Ilocal/lib/perl5 \
+            -MDevel::MAT::Core \
+            -e 'die "core unavailable\n" unless Devel::MAT::Core->available; print "rust core ok\n"'
+          PMAT_BACKEND=rust prove -Iblib/lib -Iblib/arch -Ilocal/lib/perl5 \
+            t/93-perl-rust-diff.t t/94-rust-core-api.t t/95-parity-remaining.t t/96-pmat-idx.t
 
-      - name: Derive package version
+      - name: Derive RPM Version / Release (RPM-legal)
         id: ver
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
-            V="${GITHUB_REF_NAME#v}"
-          else
-            V="0.54.1"
-            # dev builds: append short sha
-            if [[ "${GITHUB_REF_NAME:-}" != "v"* ]]; then
-              V="${V}+git.${GITHUB_SHA::7}"
+          # RPM Version: [A-Za-z0-9._+~] only — NO hyphens.
+          # Put git metadata in Release instead.
+          SHA7="${GITHUB_SHA::7}"
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME}" =~ ^v[0-9] ]]; then
+            # v0.55.0 -> Version 0.55.0, Release 1.el8
+            VER="${GITHUB_REF_NAME#v}"
+            VER="${VER//+/-}"          # belt-and-suspenders
+            if [[ ! "$VER" =~ ^[0-9][0-9A-Za-z._+~]*$ ]]; then
+              echo "Tag version '$VER' is not RPM-safe" >&2
+              exit 1
             fi
+            REL="1"
+          else
+            # Branch / PR builds: fixed Version, Release encodes git tip
+            VER="0.55.0"
+            REL="0.git${SHA7}"
           fi
-          # RPM versions cannot contain '+'; sanitize for RPM
-          RPM_V="$(echo "$V" | tr '+/' '--')"
-          echo "version=$RPM_V" >> "$GITHUB_OUTPUT"
-          echo "raw=$V" >> "$GITHUB_OUTPUT"
-          echo "Package version: $RPM_V"
+          # Final sanity: Version must not contain '-'
+          if [[ "$VER" == *-* ]]; then
+            echo "Illegal RPM Version (contains '-'): $VER" >&2
+            exit 1
+          fi
+          {
+            echo "version=$VER"
+            echo "release=$REL"
+            echo "dist=.el8"
+          } >> "$GITHUB_OUTPUT"
+          echo "RPM NVRA will be perl-Devel-MAT-${VER}-${REL}.el8.*"
 
       - name: Build Rocky 8 RPM
         run: |
           set -euo pipefail
-          export PATH="$HOME/.cargo/bin:${GITHUB_WORKSPACE}/local/bin:$HOME/perl5/bin:$PATH"
-          export PERL5LIB="${GITHUB_WORKSPACE}/local/lib/perl5${PERL5LIB:+:$PERL5LIB}"
-          # Tests already ran; skip second full suite inside packager for speed
+          export PATH="$HOME/.cargo/bin:${{ env.PERL_LOCAL }}/bin:$HOME/perl5/bin:$PATH"
+          export PERL5LIB="${{ env.PERL_LOCAL }}/lib/perl5${PERL5LIB:+:$PERL5LIB}"
           export PMAT_RPM_SKIP_TEST=1
           export PMAT_VERSION="${{ steps.ver.outputs.version }}"
-          export PMAT_RELEASE=1
-          export PMAT_DIST=.el8
+          export PMAT_RELEASE="${{ steps.ver.outputs.release }}"
+          export PMAT_DIST="${{ steps.ver.outputs.dist }}"
           chmod +x packaging/rpm/build-rocky8.sh
           ./packaging/rpm/build-rocky8.sh
+          # Sanity: one RPM, no colon paths in the package file list
+          shopt -s nullglob
+          rpms=( dist/rpm/perl-Devel-MAT-*.rpm )
+          (( ${#rpms[@]} >= 1 )) || { echo "no RPM produced" >&2; exit 1; }
           ls -la dist/rpm/
+          rpm -qip "${rpms[0]}" | head -20
+          # Fail if man pages with '::' snuck in (breaks GH artifacts)
+          if rpm -qlp "${rpms[0]}" | grep -F '::' ; then
+            echo "RPM still contains paths with '::' (man pages?)" >&2
+            exit 1
+          fi
 
       - name: Upload RPM artifacts
         uses: actions/upload-artifact@v4
@@ -160,29 +191,35 @@ jobs:
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}"
           TAG="${GITHUB_REF_NAME}"
-          # gh may be missing in the Rocky container — install official binary
           if ! command -v gh >/dev/null 2>&1; then
-            curl -sL "https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz" \
+            curl -fsSL "https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz" \
               | tar xz -C /tmp
             install -m 0755 /tmp/gh_*/bin/gh /usr/local/bin/gh
           fi
-          # Ensure release exists (created by earlier publish or create now)
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --notes "Automated Rocky 8 hybrid build." \
-              --repo "$GH_REPO"
+          # Do not require a git worktree discovery; always pass --repo
+          if ! gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$GH_REPO" \
+              --title "$TAG" \
+              --notes "Rocky 8 hybrid build (perl-Devel-MAT RPM + libpmat_core.so)."
           fi
-          gh release upload "$TAG" dist/rpm/*.rpm dist/rpm/libpmat_core.so --clobber \
-            --repo "$GH_REPO"
+          gh release upload "$TAG" \
+            --repo "$GH_REPO" \
+            --clobber \
+            dist/rpm/*.rpm \
+            dist/rpm/libpmat_core.so
           gh release view "$TAG" --repo "$GH_REPO"
 
-      - name: Upload failure logs
+      - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: rocky8-failure-logs
+          # Never upload stage-root / man pages (paths contain ':' and break the uploader)
           path: |
-            MYMETA.*
-            blib/arch/auto/Devel/MAT/**/*
-            dist/rpm/**
-            dist/rpmbuild/SPECS/**
+            MYMETA.yml
+            MYMETA.json
+            dist/rpm/*.rpm
+            dist/rpmbuild/SPECS/*
+            dist/rpmbuild/BUILD/*.log
           if-no-files-found: ignore

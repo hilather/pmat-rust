@@ -2,9 +2,14 @@
 //! Format reference: repo `doc/format.txt` (Devel-MAT 0.54, minor ≤ 6).
 
 mod ffi;
+mod index;
 mod parse;
 
 pub use ffi::*;
+pub use index::{
+    content_digest, index_enabled_from_env, index_path_for, last_load_used_index,
+    load_path_with_index, try_load_index, write_index, IndexOpenOutcome, SCHEMA_VERSION,
+};
 pub use parse::{Dump, Edge, Object, Strength, TYPE_NAMES};
 
 /// Crate version exposed to FFI.

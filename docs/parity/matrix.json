@@ -19,7 +19,7 @@
     {"id": "PAR-080", "surface": "plugin discovery / tool_*", "perl": "pass", "rust": "pass"},
     {"id": "PAR-090", "surface": "companion executables", "perl": "pass", "rust": "pass"},
     {"id": "PAR-100", "surface": "malformed dumps", "perl": "pass", "rust": "pass"},
-    {"id": "PAR-110", "surface": "persistent .pmat.idx", "perl": "n/a", "rust": "wip"},
+    {"id": "PAR-110", "surface": "persistent .pmat.idx", "perl": "n/a", "rust": "pass"},
     {"id": "PAR-120", "surface": "TTY / non-TTY formatting", "perl": "pass", "rust": "pass"}
   ]
 }

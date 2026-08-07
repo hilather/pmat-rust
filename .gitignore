@@ -19,10 +19,18 @@ rust/pmat-core/target/
 
 # Generated fixtures and bench output
 fixtures/*.pmat
+fixtures/*.pmat.idx
 fixtures/*.meta.json
 bench/results/*.json
 !bench/results/.gitkeep
 !fixtures/.gitkeep
+
+# Index sidecars left beside test dumps
+t/*.pmat.idx
+*.pmat.idx
+
+# Packaging staging
+dist/
 
 # Editor / OS
 *~

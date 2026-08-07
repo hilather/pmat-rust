@@ -48,6 +48,13 @@ sub load {
    return _xs_load($path);
 }
 
+# Full parse + rewrite .pmat.idx (when PMAT_IDX enabled). Never uses existing index.
+sub load_full_parse {
+   my ( $class, $path ) = @_;
+   croak_unavailable() unless available();
+   return _xs_load_full_parse($path);
+}
+
 sub croak_unavailable {
    require Carp;
    Carp::croak(

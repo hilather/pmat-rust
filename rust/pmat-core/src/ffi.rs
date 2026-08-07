@@ -67,7 +67,77 @@ pub extern "C" fn pmat_load(path: *const c_char, out: *mut *mut Dump) -> i32 {
         }
         let cstr = unsafe { CStr::from_ptr(path) };
         let path_str = try_or!(cstr.to_str().map_err(|e| e.to_string()), -2);
+        // Prefer validated .pmat.idx sidecar (PAR-110); never modifies the .pmat.
         let dump = try_or!(Dump::load_path(Path::new(path_str)), -3);
+        unsafe {
+            *out = Box::into_raw(Box::new(dump));
+        }
+        0
+    })
+}
+
+/// 1 if the most recent successful pmat_load used a validated index; else 0.
+#[no_mangle]
+pub extern "C" fn pmat_last_load_used_index() -> i32 {
+    if crate::index::last_load_used_index() {
+        1
+    } else {
+        0
+    }
+}
+
+/// Write path of the index sidecar for `dump_path` into `buf` (NUL-terminated).
+/// Returns 0 on success, negative on error.
+#[no_mangle]
+pub extern "C" fn pmat_index_path(
+    dump_path: *const c_char,
+    buf: *mut c_char,
+    buflen: usize,
+) -> i32 {
+    catch_code(|| {
+        clear_err();
+        if dump_path.is_null() || buf.is_null() || buflen == 0 {
+            set_err("null pointer");
+            return -1;
+        }
+        let cstr = unsafe { CStr::from_ptr(dump_path) };
+        let path_str = try_or!(cstr.to_str().map_err(|e| e.to_string()), -2);
+        let idx = crate::index::index_path_for(Path::new(path_str));
+        let s = idx.to_string_lossy();
+        let bytes = s.as_bytes();
+        if bytes.len() + 1 > buflen {
+            set_err("buffer too small for index path");
+            return -7;
+        }
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, bytes.len());
+            *buf.add(bytes.len()) = 0;
+        }
+        0
+    })
+}
+
+/// Force full parse and rewrite index (when index enabled). Returns same as pmat_load.
+#[no_mangle]
+pub extern "C" fn pmat_load_full_parse(path: *const c_char, out: *mut *mut Dump) -> i32 {
+    catch_code(|| {
+        clear_err();
+        if path.is_null() || out.is_null() {
+            set_err("null pointer");
+            return -1;
+        }
+        let cstr = unsafe { CStr::from_ptr(path) };
+        let path_str = try_or!(cstr.to_str().map_err(|e| e.to_string()), -2);
+        let p = Path::new(path_str);
+        let file_bytes = try_or!(
+            std::fs::read(p).map_err(|e| format!("io: {e}")),
+            -2
+        );
+        let dump = try_or!(Dump::parse_bytes(&file_bytes), -3);
+        crate::index::set_last_used_index(false);
+        if crate::index::index_enabled_from_env() {
+            let _ = crate::index::write_index(p, &file_bytes, &dump);
+        }
         unsafe {
             *out = Box::into_raw(Box::new(dump));
         }

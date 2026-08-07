@@ -21,6 +21,7 @@ preserving **full external parity** with Devel-MAT 0.54.
 │  Rust pmat-core                                         │
 │    parser (≤ format minor 6) · dense ObjectId model     │
 │    address→id map · forward + reverse edge tables       │
+│    optional versioned `.pmat.idx` sidecar (PAR-110)     │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -28,11 +29,11 @@ preserving **full external parity** with Devel-MAT 0.54.
 
 | Mode | Behavior |
 |------|----------|
+| `PMAT_BACKEND=rust` (default) | Forced Rust parse + dense graph. **No** silent Perl fallback. Load failure is a hard error. |
 | `PMAT_BACKEND=perl` | Forced 0.54 Perl/XS dump load path. Oracle. |
-| `PMAT_BACKEND=rust` | Forced Rust parse + dense graph. **No** silent Perl fallback on success path. Load failure is a hard error. |
 | `PMAT_BACKEND=auto` | Prefer Rust when the native library is available; otherwise Perl. Fallback **must not** count as a Rust pass in tests. |
 
-Default for this phase: **`perl`** (or auto only after documented readiness). Rust is never default while parity rows fail.
+Default: **`rust`** (parity matrix complete). Use `PMAT_BACKEND=perl` for the 0.54 oracle path.
 
 ## Dense model (Rust)
 
@@ -53,6 +54,22 @@ Default for this phase: **`perl`** (or auto only after documented readiness). Ru
 - Hot graph queries also expose **batch** native CSR edges (`outrefs_batch` /
   `inrefs_batch` / `type_counts`) for differential and future non-materializing paths.
 - `heap()` materializes all proxies when called (0.54 semantics).
+
+## Persistent index (PAR-110)
+
+On successful forced-Rust load (`pmat_load` / `Devel::MAT::Core->load`), pmat-core
+may write a versioned sidecar **`<dump>.pmat.idx`** (never modifies the `.pmat`).
+
+| Rule | Behavior |
+|------|----------|
+| Schema | Magic `PMATIDX\x01`, schema version 1 |
+| Trust | Source size + 128-bit content digest + payload CRC-32 must all match |
+| Miss / bad | Full re-parse; index rewritten when enabled |
+| Disable | `PMAT_IDX=0` (or `false`/`off`/`no`) skips read and write |
+| Probe | `Devel::MAT::Core::last_load_used_index()` after load |
+
+Residual: index stores a full dense-model snapshot (not mmap/incremental); first
+open pays parse + write cost; second open can skip re-parse when valid.
 
 ## Format
 

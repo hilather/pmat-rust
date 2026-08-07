@@ -33,8 +33,8 @@ Tag: `v0.54` (when present).
 ## Backend control
 
 ```bash
-export PMAT_BACKEND=perl   # default oracle path
-export PMAT_BACKEND=rust   # forced Rust (hard error if core unavailable)
+export PMAT_BACKEND=rust   # default when unset — forced Rust (hard error if core unavailable)
+export PMAT_BACKEND=perl   # 0.54 oracle path
 export PMAT_BACKEND=auto   # prefer Rust when built; fallback not a Rust pass
 ```
 

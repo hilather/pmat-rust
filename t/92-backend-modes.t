@@ -65,10 +65,10 @@ require Devel::MAT::Backend;
    }
 }
 
-# Default without env is perl
+# Default without env is rust (post-parity promotion)
 {
    delete local $ENV{PMAT_BACKEND};
-   is( Devel::MAT::Backend->mode, 'perl', 'default mode is perl' );
+   is( Devel::MAT::Backend->mode, 'rust', 'default mode is rust' );
 }
 
 done_testing;

@@ -242,7 +242,14 @@ struct PendingEdge {
 }
 
 impl Dump {
+    /// Load dump from path. Prefer a validated `.pmat.idx` sidecar when enabled
+    /// (`PMAT_IDX` not disabled); otherwise full parse and rewrite the index.
     pub fn load_path(path: &Path) -> Result<Self, String> {
+        crate::index::load_path_with_index(path).map(|(d, _)| d)
+    }
+
+    /// Full parse only (no index). Used when rebuilding or when index is disabled.
+    pub fn load_path_full_parse(path: &Path) -> Result<Self, String> {
         let data = fs::read(path).map_err(|e| format!("io: {e}"))?;
         Self::parse_bytes(&data)
     }
