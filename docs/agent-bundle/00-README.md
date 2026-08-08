@@ -10,6 +10,7 @@ This bundle packages the modernization plan into taskable Markdown files for an 
 - **Docs updated in the same change**
 - **Regression tests for every behavior/optimization change**
 - **Benchmarks refreshed on every performance-affecting commit** (`docs/performance.md` + harness)
+- **Failed attempts + hard-won Perl/Rust semantics** → [`docs/lessons/`](../lessons/README.md) (light index; detail on demand)
 
 This directory is historical/phased modernization context; `AGENTS.md` is the standing SoT for how to work.
 

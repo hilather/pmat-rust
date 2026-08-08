@@ -8,6 +8,8 @@ parity suites must stay green under `PMAT_BACKEND=perl` and `PMAT_BACKEND=rust`.
 every performance-affecting commit** (tables + OPT checkboxes + honest
 residuals), and re-run `./bench/run-bench` (at least `--size=small`). Process
 details: root [`AGENTS.md`](https://github.com/hilather/pmat-rust/blob/main/AGENTS.md).
+Failed or blocked OPTs also get a short entry under
+[`docs/lessons/`](https://github.com/hilather/pmat-rust/blob/main/docs/lessons/README.md).
 
 Harness: [`bench/README.md`](https://github.com/hilather/pmat-rust/blob/main/bench/README.md)
 (`./bench/run-bench --json=…`). Raw JSON may live under `bench/results/`

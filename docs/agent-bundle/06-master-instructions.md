@@ -110,6 +110,7 @@ Do not commit without steps 5, 9, and 10 when the change can affect runtime beha
 - Every optimization requires before-and-after measurements.
 - Every performance-affecting commit updates benchmarks + `docs/performance.md` (see root `AGENTS.md`).
 - Never ship an optimization without a regression test that guards oracle parity or the lazy/materialize invariant.
+- Every failed OPT, wrong approach, or newly understood Perl/Rust semantic is logged under `docs/lessons/` (index + optional detail).
 
 ## Release gate
 

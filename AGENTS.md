@@ -66,6 +66,7 @@ Same change set as the code — not a follow-up PR “later”.
 | Oracle / process rules | `docs/ORACLE-0.54.md` |
 | Index / FFI / core API | architecture + any parity rows + performance OPT notes |
 | Bench harness / tiers | `bench/README.md` |
+| Failed attempt / hard-won semantics | [`docs/lessons/`](docs/lessons/README.md) (see below) |
 | Agent process | this file + `docs/agent-bundle/` if standing process changes |
 
 Rules:
@@ -74,6 +75,44 @@ Rules:
 - Absolute HTTPS links in user-facing docs when linking across files for release notes; in-repo agent docs may use repo-relative paths.
 - Do not mark OPT or parity rows **done** without implementation + tests + measured evidence.
 - Document limitations and fallbacks when claiming new capabilities.
+
+---
+
+## Capture failed attempts and hard-won semantics
+
+**Automatically save** discoveries that would waste the next session if lost.
+Home: [`docs/lessons/README.md`](docs/lessons/README.md) (light index + optional
+detail pages).
+
+### When you must write a lesson
+
+| Event | Action |
+|-------|--------|
+| Performance OPT tried and **reverted / blocked** | Index row + detail if non-obvious; residual in `docs/performance.md` |
+| Approach **wrong for 0.54** after measurement/tests | Same — name the invariant that was violated |
+| **Perl** semantics that surprised you (context, dualvars, blessed hashes, `outrefs` strengths, hash iteration, …) | Semantics note (index + detail if needed) |
+| **Rust** semantics that surprised you (FFI ownership, panic boundaries, layout, endian, string/NV handling, …) | Semantics note |
+| Flaky oracle that turned out to be **env/hash-seed / load order** | Semantics note so tests don’t “fix” the wrong thing |
+
+Do this **in the same change** as the pullback or discovery when practical — do
+not wait for a polish PR.
+
+### Keep it light; drill down on demand
+
+| Layer | What | Length |
+|-------|------|--------|
+| **Index** (`docs/lessons/README.md`) | Date, title, kind (`failed` / `residual` / `semantics`), link | **One row** |
+| **Quick scan** (top of same README) | Bullets “do not retry X until Y” | 1–3 lines each |
+| **Detail** (`docs/lessons/<slug>.md`) | Symptom, tried, root cause, correct model, do-not-retry-until, tests | Short sections; bullets over essays |
+
+Agents starting work: **skim the index + quick scan** before re-attempting an
+OPT or inventing a native path. Open a detail page only when the topic matches.
+
+### Do not
+
+- Dump full logs, traces, or huge tables into lessons (link to commit / test name instead).
+- Mark OPT **done** while the only record of failure is chat history.
+- Re-try a “do not retry until” item without updating the lesson with new evidence.
 
 ---
 

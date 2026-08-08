@@ -389,7 +389,8 @@ Notable test groups:
 
 | Doc | Contents |
 |-----|----------|
-| [**AGENTS.md**](AGENTS.md) | **Standing agent rules** — performance first, docs, tests, benches every commit |
+| [**AGENTS.md**](AGENTS.md) | **Standing agent rules** — performance first, docs, tests, benches, lessons |
+| [lessons/](docs/lessons/) | Failed OPT attempts + hard-won Perl/Rust semantics (light index) |
 | [UserGuide (POD)](lib/Devel/MAT/UserGuide.pod) | Capture + analysis introduction |
 | [architecture-hybrid.md](docs/architecture-hybrid.md) | Layer diagram, dense model, backends |
 | [parity/matrix.md](docs/parity/matrix.md) | Feature-parity gate table |
