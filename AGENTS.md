@@ -147,6 +147,7 @@ Before claiming complete or asking to commit:
 - [ ] Docs for behavior, OPT status, and residuals are updated
 - [ ] Benchmarks run and `docs/performance.md` (and baseline JSON if applicable) reflect current numbers
 - [ ] Residuals and tradeoffs stated honestly (no silent capability claims)
+- [ ] Any failed OPT / wrong approach / new Perl or Rust semantic is recorded under `docs/lessons/` (index row at minimum)
 
 ---
 
