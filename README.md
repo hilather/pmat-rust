@@ -389,6 +389,7 @@ Notable test groups:
 
 | Doc | Contents |
 |-----|----------|
+| [**AGENTS.md**](AGENTS.md) | **Standing agent rules** — performance first, docs, tests, benches every commit |
 | [UserGuide (POD)](lib/Devel/MAT/UserGuide.pod) | Capture + analysis introduction |
 | [architecture-hybrid.md](docs/architecture-hybrid.md) | Layer diagram, dense model, backends |
 | [parity/matrix.md](docs/parity/matrix.md) | Feature-parity gate table |
@@ -403,13 +404,15 @@ Notable test groups:
 
 ## Design principles
 
-1. **Oracle wins** — 0.54 observed behavior beats “cleaner” rewrites unless an explicit compatibility mode is tested.
-2. **No silent mis-attribution** — Rust failures never hide behind Perl fallback in tests; `PMAT_BACKEND=rust` hard-fails.
-3. **Keep the shell** — plugins, commands, and blessed SV proxies stay familiar.
-4. **Dense native model first** — layout and algorithms deliver more than a pure language rewrite.
-5. **Safe FFI** — panic-contained C ABI; no one-FFI-call-per-edge hot loops.
-6. **Never mutate** the source `.pmat` file.
-7. **Never trust an unvalidated index** — schema, source digest, and payload CRC must all match before reuse.
+1. **Performance first** — large-dump wall time and RSS drive design; measure every change (`docs/performance.md`, `bench/`).
+2. **Oracle wins** — 0.54 observed behavior beats “cleaner” rewrites unless an explicit compatibility mode is tested.
+3. **No silent mis-attribution** — Rust failures never hide behind Perl fallback in tests; `PMAT_BACKEND=rust` hard-fails.
+4. **Docs + tests + benches with the code** — same commit; see [AGENTS.md](AGENTS.md).
+5. **Keep the shell** — plugins, commands, and blessed SV proxies stay familiar.
+6. **Dense native model first** — layout and algorithms deliver more than a pure language rewrite.
+7. **Safe FFI** — panic-contained C ABI; no one-FFI-call-per-edge hot loops.
+8. **Never mutate** the source `.pmat` file.
+9. **Never trust an unvalidated index** — schema, source digest, and payload CRC must all match before reuse.
 
 ---
 

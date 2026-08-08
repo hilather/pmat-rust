@@ -38,4 +38,5 @@ export PMAT_BACKEND=perl   # 0.54 oracle path
 export PMAT_BACKEND=auto   # prefer Rust when built; fallback not a Rust pass
 ```
 
-See also: `docs/architecture-hybrid.md`, `docs/parity/matrix.md`, `docs/agent-bundle/`.
+See also: root `AGENTS.md` (standing agent process), `docs/architecture-hybrid.md`,
+`docs/parity/matrix.md`, `docs/performance.md`, `docs/agent-bundle/`.

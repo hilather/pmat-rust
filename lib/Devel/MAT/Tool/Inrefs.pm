@@ -34,6 +34,12 @@ that refer to it. It follows the C<outrefs> method of every heap SV and
 annotates the referred SVs with back-references pointing back to the SVs that
 refer to them.
 
+B<Note:> Dense CSR reverse edges are a structural subset of 0.54 C<outrefs>
+(e.g. CODE C<"the glob"> may be strong in Perl but absent from the CSR). For
+oracle parity this tool always builds the reverse index from proxy
+C<outrefs> (classic walk). A pure-CSR path remains residual until the dense
+graph includes the full 0.54 edge set.
+
 =cut
 
 sub init_tool
@@ -42,6 +48,8 @@ sub init_tool
 
    my $df = $self->df;
 
+   # Classic outref walk — required for 0.54 strength + edge completeness.
+   # (CSR reverse alone loses weak/strong classification and some edges.)
    my $heap_total = scalar $df->heap;
    my $count = 0;
    foreach my $sv ( $df->heap ) {
@@ -131,15 +139,19 @@ sub Devel::MAT::SV::_inrefs
       my %seen;
       foreach my $addr ( @{ $self->{tool_inrefs}[ $STRENGTH_TO_IDX{$strength} ] // [] } ) {
          if( $just_count ) {
+            # Classic path: slots are pre-bucketed by 0.54 strength during init,
+            # so counting slot entries matches list context after re-filter
+            # (each push is one outref edge of that strength).
             push @inrefs, 1;
          }
          else {
             $seen{$addr}++ and next;
 
             my $sv = $df->sv_at( $addr );
+            next unless $sv;
 
             push @inrefs, Devel::MAT::SV::Reference( $_->name, $_->strength, $sv )
-               for grep { $_->strength eq $strength and $_->sv == $self } $sv->outrefs;
+               for grep { $_->strength eq $strength and $_->sv && $_->sv == $self } $sv->outrefs;
          }
       }
    }

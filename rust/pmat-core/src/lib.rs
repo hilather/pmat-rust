@@ -8,7 +8,8 @@ mod parse;
 pub use ffi::*;
 pub use index::{
     content_digest, index_enabled_from_env, index_path_for, last_load_used_index,
-    load_path_with_index, try_load_index, write_index, IndexOpenOutcome, SCHEMA_VERSION,
+    load_path_with_index, should_use_index, try_load_index, write_index, IndexOpenOutcome,
+    DEFAULT_IDX_MIN_BYTES, SCHEMA_VERSION,
 };
 pub use parse::{Dump, Edge, Object, Strength, TYPE_NAMES};
 

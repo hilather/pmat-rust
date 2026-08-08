@@ -45,7 +45,17 @@ sub run
    Devel::MAT::Cmd->printf( "Perl memory dumpfile from perl %s %s\n",
       $df->perlversion, $df->ithreads ? "threaded" : "non-threaded" );
 
-   Devel::MAT::Cmd->printf( "Heap contains %d objects\n", scalar $df->heap );
+   # Prefer core heap_count under forced-Rust so summary does not force
+   # full proxy materialization via heap() (OPT open-path / large dumps).
+   my $n;
+   if ( $df->can('rust_core') && $df->rust_core && $df->rust_core->can('heap_count') ) {
+      $n = $df->rust_core->heap_count;
+   }
+   else {
+      $n = scalar $df->heap;
+   }
+
+   Devel::MAT::Cmd->printf( "Heap contains %d objects\n", $n );
 }
 
 =head1 AUTHOR

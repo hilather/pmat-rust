@@ -61,15 +61,60 @@ pub fn index_path_for(dump: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Index I/O enabled unless `PMAT_IDX=0` / `false` / `off` / `no`.
+/// Index I/O policy (OPT-09):
+/// - `PMAT_IDX=0|false|off|no|disable` → never use/write index
+/// - `PMAT_IDX=1|true|on|yes|force|always` → always use/write (PAR-110 tests)
+/// - unset / other → use/write only when dump size ≥ threshold (default 64 MiB)
+///   so small/medium dumps skip the fat full-snapshot sidecar by default.
+/// - `PMAT_IDX_MIN_BYTES=N` overrides the size threshold (bytes).
 pub fn index_enabled_from_env() -> bool {
     match std::env::var("PMAT_IDX") {
         Ok(v) => {
             let v = v.trim().to_ascii_lowercase();
-            !(v == "0" || v == "false" || v == "off" || v == "no" || v == "disable")
+            if v == "0" || v == "false" || v == "off" || v == "no" || v == "disable" {
+                return false;
+            }
+            // Explicit force: always on regardless of size (checked in should_use_index).
+            true
         }
-        Err(_) => true,
+        Err(_) => true, // default: size-gated in should_use_index
     }
+}
+
+/// Whether index is forced on (ignore size gate).
+pub fn index_forced_from_env() -> bool {
+    match std::env::var("PMAT_IDX") {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            matches!(
+                v.as_str(),
+                "1" | "true" | "on" | "yes" | "force" | "always"
+            )
+        }
+        Err(_) => false,
+    }
+}
+
+/// Default minimum dump size (bytes) for automatic index use/write.
+pub const DEFAULT_IDX_MIN_BYTES: u64 = 64 * 1024 * 1024;
+
+pub fn index_min_bytes_from_env() -> u64 {
+    match std::env::var("PMAT_IDX_MIN_BYTES") {
+        Ok(v) => v.trim().parse().unwrap_or(DEFAULT_IDX_MIN_BYTES),
+        Err(_) => DEFAULT_IDX_MIN_BYTES,
+    }
+}
+
+/// Whether to read/write `.pmat.idx` for a dump of `file_len` bytes.
+pub fn should_use_index(file_len: u64) -> bool {
+    if !index_enabled_from_env() {
+        return false;
+    }
+    if index_forced_from_env() {
+        return true;
+    }
+    // Default / non-force PMAT_IDX: size gate (avoids fat idx on small/medium).
+    file_len >= index_min_bytes_from_env()
 }
 
 /// 128-bit FNV-1a over `data` (two independent 64-bit streams).
@@ -643,9 +688,9 @@ pub fn try_load_index(dump_path: &Path, file_bytes: &[u8]) -> Result<Dump, Strin
 /// Load dump: prefer validated index, else full parse; rewrite index after full parse when enabled.
 pub fn load_path_with_index(path: &Path) -> Result<(Dump, IndexOpenOutcome), String> {
     let file_bytes = fs::read(path).map_err(|e| format!("io: {e}"))?;
-    let enabled = index_enabled_from_env();
+    let use_idx = should_use_index(file_bytes.len() as u64);
 
-    if enabled {
+    if use_idx {
         match try_load_index(path, &file_bytes) {
             Ok(dump) => {
                 set_last_used_index(true);
@@ -660,7 +705,7 @@ pub fn load_path_with_index(path: &Path) -> Result<(Dump, IndexOpenOutcome), Str
     let dump = Dump::parse_bytes(&file_bytes)?;
     set_last_used_index(false);
 
-    if enabled {
+    if use_idx {
         // Best-effort rewrite; failure to write index is not a load failure.
         let _ = write_index(path, &file_bytes, &dump);
     }

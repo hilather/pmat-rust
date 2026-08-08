@@ -153,6 +153,23 @@ Returns the total size, in bytes, of the SVs owned by the given one.
 
 =cut
 
+# Exclusive strong children: non-immortal strong outrefs with refcnt == 1.
+# Same filter as the historic owned_set walk (0.54 semantics).
+# NOTE: this digraph is not always a tree — the same refcnt==1 SV can appear as
+# a strong outref from multiple parents (e.g. GLOB→CODE and protosub GLOB→CODE).
+# owned_size therefore cannot use child-sum DP; it must use a %seen walk.
+# Children lists are cached on the SV to avoid repeating outrefs_strong.
+sub Devel::MAT::SV::_owned_children
+{
+   my $sv = shift;
+   return @{ $sv->{tool_sizes_owned_chld} } if $sv->{tool_sizes_owned_chld};
+   my @c = grep {
+      $_ && !$_->immortal && $_->refcnt == 1
+   } map { $_->sv } $sv->outrefs_strong;
+   $sv->{tool_sizes_owned_chld} = \@c;
+   return @c;
+}
+
 sub Devel::MAT::SV::owned_set
 {
    my @more = ( shift );
@@ -162,20 +179,70 @@ sub Devel::MAT::SV::owned_set
 
    while( @more ) {
       my $next = pop @more;
+      next if $seen{ $next->addr }++;
       push @owned, $next;
-
-      $seen{$next->addr}++;
-      push @more, grep { !$seen{$_->addr} and
-                         !$_->immortal and
-                         $_->refcnt == 1 } map { $_->sv } $next->outrefs_strong;
+      push @more, grep { !$seen{ $_->addr } } $next->_owned_children;
    }
    return @owned;
 }
 
+# Generation counter for owned_size %seen (avoids clearing a big hash each call).
+our $_owned_size_gen = 0;
+our %_owned_size_seen_gen;  # addr => generation
+
+# owned_size ≡ sum of size() over owned_set (0.54). Always a classic %seen walk
+# (cached children). Never sums child owned_size — that over-counts diamonds
+# (same exclusive child claimed via multiple strong outrefs).
 sub Devel::MAT::SV::owned_size
 {
    my $sv = shift;
-   return $sv->{tool_sizes_owned} //= sum0 map { $_->size } $sv->owned_set;
+   return $sv->{tool_sizes_owned} if defined $sv->{tool_sizes_owned};
+
+   # Fast path: no exclusive children → just this SV.
+   my @kids = $sv->_owned_children;
+   if ( !@kids ) {
+      return $sv->{tool_sizes_owned} = $sv->size;
+   }
+
+   my $gen = ++$_owned_size_gen;
+   # Prevent gen overflow stomping; rare, cheap reset.
+   if ( $gen >= 2_000_000_000 ) {
+      %_owned_size_seen_gen = ();
+      $gen = $_owned_size_gen = 1;
+   }
+
+   my $total = 0;
+   my @stack = ( $sv );
+   while ( @stack ) {
+      my $n = pop @stack;
+      my $a = $n->addr;
+      next if ( $_owned_size_seen_gen{$a} // 0 ) == $gen;
+      $_owned_size_seen_gen{$a} = $gen;
+      $total += $n->size;
+      my $ch = $n->{tool_sizes_owned_chld};
+      if ( $ch ) {
+         push @stack, @$ch;
+      }
+      else {
+         push @stack, $n->_owned_children;
+      }
+   }
+   return $sv->{tool_sizes_owned} = $total;
+}
+
+# Full-heap fill for largest --owned: prime children caches once (one outrefs pass
+# per SV), then classic owned_size per SV. Correct for multi-parent exclusive edges.
+sub Devel::MAT::Tool::Sizes::_largest::_precompute_owned_sizes
+{
+   my ( $svs ) = @_;
+   return unless $svs && @$svs;
+
+   for my $sv ( @$svs ) {
+      $sv->_owned_children;
+   }
+   for my $sv ( @$svs ) {
+      $sv->owned_size;
+   }
 }
 
 =head1 COMMANDS
@@ -262,10 +329,35 @@ By default, only the individual SV size is counted.
 use constant CMD => "largest";
 use constant CMD_DESC => "Find the largest SVs by size";
 
-use Heap;
-use List::UtilsBy qw( max_by );
-
 my %seen;
+
+# Fixed top-K selection: O(N·K) for small K (default 5/3/2). Higher score wins;
+# ties broken by lower address (stable, deterministic). Replaces full Fibonacci
+# heap over every SV (OPT-10).
+# Callable as function or package method (drops invocant when not an ARRAY ref).
+sub _select_topk
+{
+   shift if @_ && !ref( $_[0] );
+   my ( $svlist, $method, $k ) = @_;
+   return () if $k <= 0 || !@$svlist;
+
+   # @best held sorted descending by score, then ascending by addr; length <= k
+   my @best;
+   for my $sv ( @$svlist ) {
+      my $score = $sv->$method;
+      my $addr  = $sv->addr;
+      if ( @best < $k
+           || $score > $best[-1][0]
+           || ( $score == $best[-1][0] && $addr < $best[-1][1] ) ) {
+         push @best, [ $score, $addr, $sv ];
+         @best = sort {
+            $b->[0] <=> $a->[0] || $a->[1] <=> $b->[1]
+         } @best;
+         pop @best if @best > $k;
+      }
+   }
+   return map { $_->[2] } @best;
+}
 
 sub list_largest_svs
 {
@@ -273,14 +365,10 @@ sub list_largest_svs
 
    my $method = $metric ? "${metric}_size" : "size";
 
-   my $heap = Heap::Fibonacci->new;
-   $heap->add( Devel::MAT::Tool::Sizes::_Elem->new( $_->$method, $_ ) ) for @$svlist;
-
    my $count = shift @counts;
-   while( $count-- ) {
-      my $topelem = $heap->extract_top or last;
-      my $largest = $topelem->sv;
+   my @top = _select_topk( $svlist, $method, $count );
 
+   for my $largest ( @top ) {
       $seen{$largest->addr}++;
 
       Devel::MAT::Cmd->printf( "$indent%s: %s",
@@ -319,15 +407,6 @@ sub list_largest_svs
    }
 }
 
-package Devel::MAT::Tool::Sizes::_Elem {
-   sub new { my ( $class, $val, $sv ) = @_; bless [ $val, $sv ], $class }
-
-   sub sv { my $self = shift; return $self->[1]; }
-   sub heap { my $self = shift; $self->[2] = shift if @_; return $self->[2] }
-
-   sub cmp { my ( $self, $other ) = @_; return $other->[0] <=> $self->[0] }
-}
-
 use constant CMD_OPTS => (
    struct => { help => "count SVs by structural size" },
    owned  => { help => "count SVs by owned size" },
@@ -357,14 +436,22 @@ sub run
    my $method = $METRIC ? "${METRIC}_size" : "size";
 
    my $heap_total = scalar @svs;
-   my $count = 0;
-   foreach my $sv ( @svs ) {
-      $count++;
-      $self->report_progress( sprintf "Calculating sizes in %d of %d (%.2f%%)",
-         $count, $heap_total, 100*$count / $heap_total ) if $count % 20000 == 0;
-      $sv->$method;
+   if ( $METRIC && $METRIC eq "owned" ) {
+      # One O(V+E) SCC+DP pass (cycle-safe); then method hits cache.
+      $self->report_progress( "Calculating owned sizes..." ) if $heap_total;
+      _precompute_owned_sizes( \@svs );
+      $self->report_progress();
    }
-   $self->report_progress();
+   else {
+      my $count = 0;
+      foreach my $sv ( @svs ) {
+         $count++;
+         $self->report_progress( sprintf "Calculating sizes in %d of %d (%.2f%%)",
+            $count, $heap_total, 100*$count / $heap_total ) if $count % 20000 == 0;
+         $sv->$method;
+      }
+      $self->report_progress();
+   }
 
    undef %seen;
    list_largest_svs( \@svs, $METRIC, "", @counts );

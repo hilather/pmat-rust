@@ -4,6 +4,11 @@ Source of truth for load/query performance work after feature parity (v0.55.0,
 default `PMAT_BACKEND=rust`). Every OPT item needs before/after measurements;
 parity suites must stay green under `PMAT_BACKEND=perl` and `PMAT_BACKEND=rust`.
 
+**Agent rule:** performance is the primary product goal. **Update this file on
+every performance-affecting commit** (tables + OPT checkboxes + honest
+residuals), and re-run `./bench/run-bench` (at least `--size=small`). Process
+details: root [`AGENTS.md`](https://github.com/hilather/pmat-rust/blob/main/AGENTS.md).
+
 Harness: [`bench/README.md`](https://github.com/hilather/pmat-rust/blob/main/bench/README.md)
 (`./bench/run-bench --json=…`). Raw JSON may live under `bench/results/`
 (often gitignored); **this document** holds the committed summary.
@@ -57,6 +62,17 @@ Ephemeral re-runs may also appear as gitignored `bench/results/*.json`.
 | small | 1.47 | **0.22** | **~6.5×** |
 | medium | 6.81 | **1.02** | **~6.7×** |
 
+### v0.57.0 full-suite re-bench (rust cold, 2026-08-07)
+
+`./bench/run-bench --size=small,medium` after OPT-02/09/10 + classic inrefs residual:
+
+| Tier | Load (s) | Inrefs (s) | Count (s) | Total (s) | Peak RSS (MB) |
+|------|----------|------------|-----------|-----------|---------------|
+| small | **0.227** | 1.46 | 0.25 | 4.14 | 269 |
+| medium | **1.025** | 5.62 | 1.17 | 17.7 | 1372 |
+
+Load remains ~**6.5×** vs pre-OPT-01 rust cold. Full-suite inrefs/count still pay after materialize (suite order); interactive open path (summary/default count without full heap) is documented under “After open-path…” below.
+
 Core-only vs Dumpfile after load (roots only, not full `heap()`):
 
 | Tier | Core cold | Dumpfile lazy load | Proxies at load |
@@ -75,17 +91,44 @@ Priority is **impact on user-visible load / interactive tools**, not rewrite
 volume. Checkboxes: `[x]` done in-tree, `[ ]` still open.
 
 - [x] **OPT-01** — Lazy SV proxies on forced-Rust load (on-demand `sv_at` / `rust_proxy_for_id`; `heap()` full materialize; one proxy per ObjectId)
-- [ ] **OPT-02** — Count without full proxy walk (default mode from `type_counts`; preserve PAD/BOOL reclass)
-- [ ] **OPT-03** — Batch / native inrefs build from CSR / `inrefs_batch`
-- [ ] **OPT-04** — Sizes / reachability / find on native model
+- [x] **OPT-02** — Default `count` without full proxy walk (dense `object_at` + CODE pad reclass; option modes still walk)
+- [ ] **OPT-03** — Inrefs CSR first-use (residual: dense reverse graph lacks some 0.54 edges e.g. CODE "the glob"; classic outref walk retained for oracle parity)
+- [ ] **OPT-04** — Sizes / reachability / find on native model (partial: owned_size memoization shipped; native CSR still open)
 - [ ] **OPT-05** — Identify / outrefs / show on batch edges (materialize walk set only)
 - [ ] **OPT-06** — Cheap / stub proxies for graph-only walks
 - [ ] **OPT-07** — Reduce dual-residency memory (core + Perl)
 - [ ] **OPT-08** — Hash outref O(K²) path
-- [ ] **OPT-09** — Index cost model & mmap / selective hydrate
-- [ ] **OPT-10** — Top-K / largest without full heap structure
+- [x] **OPT-09** — Index size gate (default skip fat `.pmat.idx` under 64 MiB unless `PMAT_IDX=1`)
+- [x] **OPT-10** — Top-K / largest without full Fibonacci heap; correct cached `owned_size`
 - [ ] **OPT-11** — Huge / production scaling gates
-- [x] **OPT-12** — Measure & guard regressions (baseline committed; re-bench after OPT-01)
+- [x] **OPT-12** — Measure & guard regressions
+
+### After open-path / count / index policy (inrefs classic — OPT-03 residual)
+
+Measured forced-rust, `PMAT_IDX=0` (post CSR-inrefs pullback for oracle parity):
+
+| Path | Before (medium) | After (medium) | After (small) | Materialize |
+|------|-----------------|----------------|---------------|-------------|
+| **summary** | ~10 s | **~0 s** | **~0 s** | roots only (~1.5k / 666k) |
+| **default count** | ~2 s (after full heap) | **~1.2–1.4 s** | **~0.3 s** | **no full heap** (~1.5k) |
+| **inrefs init** | ~7 s | **~14–17 s** | **~3 s** | **full heap** (classic outref walk) |
+
+**Inrefs residual (OPT-03):** pure CSR reverse was attempted but rejected — dense strengths are structural (not 0.54 weak array/CODE `"the glob"`), and scalar `inrefs_*` overcounted without outrefs re-filter. Shipped path is the classic `foreach heap + outrefs` walk for oracle parity (`t/10tool-inrefs.t`, `t/99-hotpath-lazy.t`). Re-enable CSR only after the dense edge builder emits the full 0.54 strong/weak set.
+
+**Index policy:** default uses/writes `.pmat.idx` only when dump size ≥ **64 MiB** (`PMAT_IDX_MIN_BYTES`). `PMAT_IDX=1|force|always` always on; `PMAT_IDX=0` off.
+
+### After OPT-10 (`largest --owned` + correct owned_size)
+
+| Metric | Before | After | Notes |
+|--------|--------|-------|-------|
+| Full-heap `owned_size` pass (small, 143k) | 23.6 s | **~2.9 s** | children-cache + leaf path; **0 mismatches** vs classic |
+| Full-heap `owned_size` pass (medium, 666k) | **>630 s** (killed) | **~13 s** | ≫40× |
+| `largest --owned` command (small) | ~117 s | much lower precompute; tree still costs | top-K is O(N·K) |
+| `largest --owned` command (medium) | (owned pass alone >630 s) | precompute ~13 s + tree | residual tree/`heap()` |
+
+**Correctness:** `owned_size` is always a classic `%seen` walk (≡ `sum size over owned_set`). Child-sum DP is **unsafe** because exclusive-child edges form a digraph (same refcnt==1 SV claimed from multiple parents, e.g. GLOB→CODE + protosub GLOB→CODE).  
+
+**Residual:** full `heap()` materialize + display-tree `owned_set` expansion.
 
 ### OPT-01 — Lazy SV proxies on forced-Rust load  **[P0 — DONE]**
 
@@ -96,25 +139,23 @@ volume. Checkboxes: `[x]` done in-tree, `[ ]` still open.
 | **Files** | `lib/Devel/MAT/Dumpfile.pm`; `t/97-lazy-proxies.t` |
 | **Accept** | Identity stable (one proxy per id); forced-rust parity suites green; `heap()` still complete |
 
-### OPT-02 — Count without full proxy walk  **[P0]**
+### OPT-02 — Count without full proxy walk  **[DONE]**
 
 | | |
 |--|--|
-| **Problem** | `Tool::Count` still `foreach $self->df->heap` after calling `type_counts` (batch result unused for display). |
-| **Change** | Default `count` (no blessed/scalars/struct/owned): render from `rust_core->type_counts` (+ native sizes if needed). Fall back to heap walk for options that need proxy fields. |
-| **Files** | `lib/Devel/MAT/Tool/Count.pm`; optional native size histogram FFI |
-| **Target** | Count phase ≪ 1.5 s on medium when default mode |
+| **Problem** | `Tool::Count` walked full `heap()` for default count. |
+| **Change** | Default mode: dense `object_at` scan + CODE pad→PAD/PADLIST/PADNAMES reclass + YES/NO→BOOL; bytes from core sizes. Options still heap-walk. |
+| **Files** | `lib/Devel/MAT/Tool/Count.pm`; `t/99-hotpath-lazy.t` |
 | **Accept** | Default table matches 0.54 type reclassification (PAD/BOOL/…); option modes unchanged |
 
-### OPT-03 — Batch / native inrefs build  **[P1]**
+### OPT-03 — Batch / native inrefs build  **[OPEN — residual]**
 
 | | |
 |--|--|
-| **Problem** | Inrefs phase ~5 s on medium — same as Perl; reverse edges already exist in Rust CSR. |
-| **Change** | When Rust core present, seed tool inrefs from `inrefs_batch` (or bulk reverse table export) instead of scanning every outref via proxies. |
-| **Files** | `Tool/Inrefs.pm`, Core XS FFI if bulk export missing |
-| **Target** | Inrefs first-use pause near CSR scan cost, not full proxy graph walk |
-| **Accept** | Inref edges + strengths + descriptions match oracle on fixtures |
+| **Problem** | Inrefs first-use walks every proxy outref (materialize + full scan). Medium ~14–17 s after classic restore. |
+| **Attempt** | CSR reverse candidates alone miss 0.54 edges (e.g. CODE `"the glob"`) and structural strength ≠ weak array/CODE globs; pure-CSR lost weak edges and broke scalar/list count parity. |
+| **Current** | Classic outref walk retained for oracle parity (`t/10tool-inrefs.t`, `t/99-hotpath-lazy.t` reverse rebuild + fixed-hash-seed perl oracle). |
+| **Next** | Extend dense edge builder to emit full 0.54 strong/weak set, then re-enable CSR reverse + outrefs re-filter. |
 
 ### OPT-04 — Sizes / reachability / find on native model  **[P1]**
 
@@ -163,22 +204,23 @@ volume. Checkboxes: `[x]` done in-tree, `[ ]` still open.
 | **Files** | Perl `SV.pm` hash paths and/or rust payload edge builder |
 | **Accept** | Large-hash fixture outrefs match; bench on wide-hash shape |
 
-### OPT-09 — Index cost model & mmap / selective hydrate  **[P2]**
+### OPT-09 — Index cost model (size gate)  **[DONE — threshold; not mmap]**
 
 | | |
 |--|--|
-| **Problem** | Full dense snapshot index can be **slower** than re-parse on small/medium dumps. |
-| **Change** | Skip index write/read below size threshold; or mmap + partial hydrate; document when `PMAT_IDX` helps. |
-| **Files** | `rust/pmat-core/src/index.rs`, `ffi.rs` |
-| **Accept** | Medium cold load not regressed by default index policy; large dumps improve |
+| **Problem** | Fat full-snapshot `.pmat.idx` can be slower/heavier than re-parse on small/medium. |
+| **Change** | Default: use/write index only if dump ≥ 64 MiB (`PMAT_IDX_MIN_BYTES`). Force with `PMAT_IDX=1`. |
+| **Files** | `rust/pmat-core/src/index.rs`, `ffi.rs`; `t/99-hotpath-lazy.t` |
+| **Residual** | Still full dense snapshot (no mmap); helps large dumps only |
 
-### OPT-10 — Top-K / largest without full heap structure  **[P3]**
+### OPT-10 — Top-K / largest + faster correct owned_size  **[DONE]**
 
 | | |
 |--|--|
-| **Problem** | `largest` / heavy heap selection for small K (agent-bundle #6). |
-| **Change** | Fixed-size selection over native sizes; avoid full Perl sort of all SVs. |
-| **Accept** | Same top-K set (stable tie-break documented if needed) |
+| **Problem** | `largest --owned` re-did expensive `outrefs_strong` on every walk; Fibonacci heap over all N for K≈5. |
+| **Change** | Classic `%seen` `owned_size` (correct for multi-parent exclusive digraph); cache `_owned_children`; leaf fast-path; gen-counter seen; fixed top-K `_select_topk`. |
+| **Files** | `lib/Devel/MAT/Tool/Sizes.pm`; `t/98-largest-owned.t` |
+| **Accept** | Full-heap precompute matches classic sum for every SV; multi-parent claimants match; top-K matches full sort |
 
 ### OPT-11 — Huge / production scaling gates  **[P3]**
 

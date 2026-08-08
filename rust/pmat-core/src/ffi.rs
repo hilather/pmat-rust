@@ -135,7 +135,7 @@ pub extern "C" fn pmat_load_full_parse(path: *const c_char, out: *mut *mut Dump)
         );
         let dump = try_or!(Dump::parse_bytes(&file_bytes), -3);
         crate::index::set_last_used_index(false);
-        if crate::index::index_enabled_from_env() {
+        if crate::index::should_use_index(file_bytes.len() as u64) {
             let _ = crate::index::write_index(p, &file_bytes, &dump);
         }
         unsafe {

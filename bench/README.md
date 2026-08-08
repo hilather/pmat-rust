@@ -4,6 +4,10 @@ Tools to measure and regression-test `pmat` / `Devel::MAT` performance on dumps
 ranging from **fast iteration sizes** (seconds) up to **multi-gigabyte** dumps
 comparable to **~17 GiB production process** heap files.
 
+**Policy (agents):** re-run this harness and update
+[`docs/performance.md`](../docs/performance.md) on **every performance-affecting
+commit**. Standing rules: repo root [`AGENTS.md`](../AGENTS.md).
+
 ## Prerequisites
 
 ```bash

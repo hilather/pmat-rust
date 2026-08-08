@@ -2,6 +2,17 @@
 
 This bundle packages the modernization plan into taskable Markdown files for an implementation agent.
 
+## Standing process (read first)
+
+**Day-to-day agent rules live in the repo root [`AGENTS.md`](../../AGENTS.md):**
+
+- **Performance first** (with oracle parity as hard gate)
+- **Docs updated in the same change**
+- **Regression tests for every behavior/optimization change**
+- **Benchmarks refreshed on every performance-affecting commit** (`docs/performance.md` + harness)
+
+This directory is historical/phased modernization context; `AGENTS.md` is the standing SoT for how to work.
+
 ## File map
 
 - `01-executive-summary.md` - overall goal and constraints
@@ -18,3 +29,4 @@ This bundle packages the modernization plan into taskable Markdown files for an 
 - Prefer a Rust core with Perl compatibility retained until parity is proven.
 - Every unknown behavior needs a characterization test.
 - Every output change needs explicit review.
+- Keep documentation, regression tests, and performance numbers in lockstep with code (see root `AGENTS.md`).

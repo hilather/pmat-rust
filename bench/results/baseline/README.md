@@ -1,25 +1,21 @@
-# Committed performance baselines
+# Committed baseline bench JSON
 
-Snapshot date: **2026-08-06** (pre OPT-01 lazy proxies).
+JSON snapshots from `./bench/run-bench --json=…` used as the durable “before”
+numbers summarized in [`docs/performance.md`](../../docs/performance.md).
 
-These JSON files are the version-controlled reference for small + medium
-tiers. Ephemeral re-runs under `bench/results/*.json` remain gitignored.
+## When to refresh
 
-| File | Backend / mode |
-|------|----------------|
-| `perl-cold-small-medium.json` | `PMAT_BACKEND=perl`, cold load |
-| `rust-cold-small-medium.json` | `PMAT_BACKEND=rust`, cold load |
-| `rust-warm-idx-small-medium.json` | `PMAT_BACKEND=rust`, warm with `.pmat.idx` |
+Per root [`AGENTS.md`](../../../AGENTS.md): **every performance-affecting commit**
+must update measured evidence. At minimum refresh `docs/performance.md` tables
+from a new run; refresh files in this directory when:
 
-Human-readable summary and OPT backlog:
-[docs/performance.md](https://github.com/hilather/pmat-rust/blob/main/docs/performance.md).
+- shipping a major OPT milestone or release, or
+- the prior baseline is no longer comparable (harness phases, fixture tiers, or default backend changed).
 
-Regenerate (does not overwrite this tree unless you copy):
+Suggested naming: keep `perl-cold-*`, `rust-cold-*`, `rust-warm-idx-*` for the
+canonical small+medium set, or add dated copies if you need side-by-side history.
 
 ```bash
-export PERL5LIB="$PWD/blib/lib:$PWD/blib/arch:$PWD/local/lib/perl5${PERL5LIB:+:$PERL5LIB}"
-PMAT_BACKEND=perl  ./bench/run-bench --size=small,medium --json=bench/results/perl-cold-small-medium.json
-PMAT_BACKEND=rust  ./bench/run-bench --size=small,medium --json=bench/results/rust-cold-small-medium.json
-# warm: second pass with index present
-PMAT_BACKEND=rust  ./bench/run-bench --size=small,medium --json=bench/results/rust-warm-idx-small-medium.json
+./bench/run-bench --size=small,medium --json=bench/results/baseline/rust-cold-small-medium.json
+# then edit docs/performance.md summary tables to match
 ```

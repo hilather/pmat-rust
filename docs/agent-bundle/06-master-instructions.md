@@ -2,9 +2,13 @@
 
 You are implementing a modernization of Devel::MAT / PMAT version 0.54.
 
+**Also obey the standing repo rules in [`AGENTS.md`](../../AGENTS.md)** (performance first, docs + regression tests + benchmarks every commit). This file is the parity/modernization brief; `AGENTS.md` is process SoT.
+
 ## Objective
 
 Reduce dump-loading time, query latency, and memory use by introducing a Rust parser, dense object model, graph/index engine, and coarse-grained query layer.
+
+Performance is the primary product goal after (and only after) oracle-correct behavior.
 
 ## Non-negotiable requirement
 
@@ -73,18 +77,19 @@ All compatibility tests must run with both forced backends. Automatic fallback d
 
 For every task:
 
-1. Select one or more feature-parity IDs.
+1. Select one or more feature-parity IDs (or OPT IDs from `docs/performance.md`).
 2. Inspect the exact 0.54 source and POD.
 3. Create or identify a minimal fixture.
 4. Capture the 0.54 behavior.
-5. Add a characterization or differential test.
-6. Implement the smallest internal change.
+5. **Add a characterization, differential, or regression test first** (must fail without the fix / catch a wrong fast path).
+6. Implement the smallest internal change (prefer large-dump wall time and RSS).
 7. Run the original tests.
-8. Run the complete affected parity suite.
-9. Run forced Perl and forced Rust comparisons.
-10. Run the relevant benchmark.
-11. Update the parity matrix and architecture docs.
-12. Report changed files, evidence, performance, risks, and rollback.
+8. Run the complete affected parity suite (forced perl **and** forced rust).
+9. **Run the relevant benchmark** (`./bench/run-bench`, at least `--size=small`).
+10. **Update `docs/performance.md`** (tables, OPT checkboxes, residuals) and any architecture/parity docs in the **same** change.
+11. Report changed files, evidence, performance, risks, and rollback.
+
+Do not commit without steps 5, 9, and 10 when the change can affect runtime behavior.
 
 ## Rules
 
@@ -103,6 +108,8 @@ For every task:
 - Every unknown behavior requires a characterization test.
 - Every output change requires explicit review.
 - Every optimization requires before-and-after measurements.
+- Every performance-affecting commit updates benchmarks + `docs/performance.md` (see root `AGENTS.md`).
+- Never ship an optimization without a regression test that guards oracle parity or the lazy/materialize invariant.
 
 ## Release gate
 
