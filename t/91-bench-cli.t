@@ -60,6 +60,21 @@ my $perl   = $^X;
    like( $out, qr/load/i,  'mentions load phase' );
 }
 
+# largest / largest --owned command path phases
+{
+   my $json = File::Spec->catfile( $tmpdir, 'largest.json' );
+   my $out = qx{$perl \Q$run\E --size=micro --dir=\Q$tmpdir\E --json=\Q$json\E --phases=load,largest,largest_owned --largest-counts=3,2,1 2>&1};
+   is( $? >> 8, 0, 'run-bench largest phases exit 0' ) or diag $out;
+   like( $out, qr/largest_owned/i, 'reports largest_owned phase' );
+   ok( -f $json, 'wrote largest JSON' );
+   if ( open my $fh, '<', $json ) {
+      local $/;
+      my $raw = <$fh>;
+      like( $raw, qr/"largest_owned"/, 'JSON includes largest_owned' );
+      like( $raw, qr/"largest"/, 'JSON includes largest' );
+   }
+}
+
 # Synthetic tiny huge tier via size token
 {
    my $out = qx{$perl \Q$gen\E --size=huge --target-bytes=512K --dir=\Q$tmpdir\E --force 2>&1};

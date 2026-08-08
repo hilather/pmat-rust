@@ -13,7 +13,11 @@ use PMAT::Bench::Util qw(
 sub _silence (&);  # forward-declare so block form works at call sites
 
 sub phases {
-   return qw( load inrefs count sizes_struct sizes_owned reachability identify heap_walk );
+   return qw(
+      load inrefs count sizes_struct sizes_owned
+      largest largest_owned
+      reachability identify heap_walk
+   );
 }
 
 sub run {
@@ -163,6 +167,52 @@ sub run {
       };
    }
 
+   # ---- largest (top-K by SV size; default counts 5 3 2) ----
+   if ( $want{largest} ) {
+      $progress->( "largest ..." ) if $progress;
+      my @counts = @{ $opts{largest_counts} // [ 5, 3, 2 ] };
+      my $cmd = join( ' ', 'largest', @counts );
+      my ( $t ) = timed {
+         $pmat->load_tool("Sizes");
+         _silence {
+            $pmat->run_command(
+               Commandable::Invocation->new($cmd),
+               progress => ( $opts{tool_progress} ? $progress : undef ),
+            );
+         };
+      };
+      $results{phases}{largest} = {
+         %$t,
+         counts => [@counts],
+         metric => 'size',
+         svs_per_s => $t->{seconds} > 0 ? $heap_svs / $t->{seconds} : undef,
+      };
+   }
+
+   # ---- largest --owned (top-K by owned_size; default 5 3 2) ----
+   # Full shipped command path: heap materialize + owned precompute + tree.
+   # Optional and expensive on large dumps without OPT-10 memoization.
+   if ( $want{largest_owned} ) {
+      $progress->( "largest_owned ..." ) if $progress;
+      my @counts = @{ $opts{largest_counts} // [ 5, 3, 2 ] };
+      my $cmd = join( ' ', 'largest', '--owned', @counts );
+      my ( $t ) = timed {
+         $pmat->load_tool("Sizes");
+         _silence {
+            $pmat->run_command(
+               Commandable::Invocation->new($cmd),
+               progress => ( $opts{tool_progress} ? $progress : undef ),
+            );
+         };
+      };
+      $results{phases}{largest_owned} = {
+         %$t,
+         counts => [@counts],
+         metric => 'owned',
+         svs_per_s => $t->{seconds} > 0 ? $heap_svs / $t->{seconds} : undef,
+      };
+   }
+
    # ---- reachability ----
    if ( $want{reachability} ) {
       $progress->( "reachability ..." ) if $progress;
@@ -294,6 +344,13 @@ sub format_report {
       $note = $ph->{target_desc} if $name eq 'identify' && $ph->{target_desc};
       $note = sprintf( "%s outrefs", human_svs( $ph->{outrefs} ) )
          if $name eq 'heap_walk' && defined $ph->{outrefs};
+      if ( ( $name eq 'largest' || $name eq 'largest_owned' )
+         && ref( $ph->{counts} ) eq 'ARRAY' )
+      {
+         $note = sprintf( "K=%s", join( '/', @{ $ph->{counts} } ) );
+      }
+      $note = sprintf( "sample %s", human_svs( $ph->{sample_svs} ) )
+         if $name eq 'sizes_owned' && defined $ph->{sample_svs};
       push @out, sprintf(
          "%-16s %12s %12s %14s %10s",
          $name,

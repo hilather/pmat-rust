@@ -35,6 +35,9 @@ Minimum for performance-affecting commits:
    export PERL5LIB="$PWD/blib/lib:$PWD/blib/arch:$PWD/local/lib/perl5${PERL5LIB:+:$PERL5LIB}"
    ./Build   # after rust/pmat-core rebuild if needed
    ./bench/run-bench --size=small,medium --json=bench/results/after-<short-desc>.json
+   # When touching largest / owned sizes, also:
+   ./bench/run-bench --size=small,medium --phases=load,largest,largest_owned \
+     --json=bench/results/after-largest.json
    ```
 
 2. Update **`docs/performance.md`**:

@@ -77,6 +77,25 @@ processes):
 ./bench/run-bench --file=/path/to/prod.pmat --json=bench/results/prod.json
 ```
 
+## Top-K / `largest --owned`
+
+Not in the default phase list (can dominate wall time on large dumps). Opt in:
+
+```bash
+# Shipped command path: largest --owned with default tree counts 5 3 2
+./bench/run-bench --size=small,medium --phases=load,largest_owned --json=bench/results/largest-owned.json
+
+# Or flags on top of the default suite
+./bench/run-bench --size=small --largest-owned --largest-counts=5,3,2
+
+# Plain top-K by individual SV size (no owned walk)
+./bench/run-bench --size=small --largest
+```
+
+`largest_owned` drives the real `pmat` command (`run_command("largest --owned …")`),
+so it includes full `heap()`, owned precompute, and the display tree — the same
+cost users hit interactively.
+
 ## What is measured
 
 | Phase | Why it matters |
@@ -84,6 +103,9 @@ processes):
 | `load` | `Devel::MAT->load` + fixup (often the first wall-clock cliff) |
 | `inrefs` | Back-reference index; prerequisite for identify & many analyses |
 | `heap_walk` | Raw `outrefs(NO_DESC)` scan over every SV |
+| `largest` | Shipped `largest` top-K by SV `size` (default K 5/3/2) |
+| `largest_owned` | Shipped `largest --owned` top-K (owned precompute + tree; OPT-10) |
+| `sizes_owned` | Sampled `owned_size` only (not full command; use `--owned`) |
 | `count` | Type histogram |
 | `sizes_struct` | Structural size over the heap |
 | `sizes_owned` | Owned size (**sampled**; enable with `--owned`) |

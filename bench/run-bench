@@ -42,22 +42,28 @@ my $phases_spec;
 my $target_bytes;
 my $quiet = 0;
 my $owned = 0;
+my $largest = 0;
+my $largest_owned = 0;
+my $largest_counts_spec;
 my $load_progress = 0;
 my $iterations = 1;
 
 GetOptions(
-   'size|s=s'       => \$size_spec,
-   'dir|d=s'        => \$dir,
-   'file|f=s'       => \$file,
-   'json|j=s'       => \$json_out,
-   'force-gen'      => \$force_gen,
-   'phases=s'       => \$phases_spec,
-   'target-bytes=s' => \$target_bytes,
-   'owned'          => \$owned,
-   'load-progress'  => \$load_progress,
-   'iterations|n=i' => \$iterations,
-   'quiet|q'        => \$quiet,
-   'help|h'         => sub { print_usage(); exit 0 },
+   'size|s=s'          => \$size_spec,
+   'dir|d=s'           => \$dir,
+   'file|f=s'          => \$file,
+   'json|j=s'          => \$json_out,
+   'force-gen'         => \$force_gen,
+   'phases=s'          => \$phases_spec,
+   'target-bytes=s'    => \$target_bytes,
+   'owned'             => \$owned,
+   'largest'           => \$largest,
+   'largest-owned'     => \$largest_owned,
+   'largest-counts=s'  => \$largest_counts_spec,
+   'load-progress'     => \$load_progress,
+   'iterations|n=i'    => \$iterations,
+   'quiet|q'           => \$quiet,
+   'help|h'            => sub { print_usage(); exit 0 },
 ) or do { print_usage(); exit 2 };
 
 $iterations = 1 if $iterations < 1;
@@ -66,6 +72,15 @@ my @phases = $phases_spec
    ? split( /[\s,]+/, $phases_spec )
    : qw( load inrefs heap_walk count sizes_struct reachability identify );
 push @phases, 'sizes_owned' if $owned;
+push @phases, 'largest' if $largest;
+push @phases, 'largest_owned' if $largest_owned;
+
+my @largest_counts = ( 5, 3, 2 );
+if ( defined $largest_counts_spec ) {
+   @largest_counts = map { int($_) }
+      grep { length } split( /[\s,]+/, $largest_counts_spec );
+   @largest_counts = ( 5, 3, 2 ) unless @largest_counts;
+}
 
 my $progress = $quiet ? undef : sub {
    my $msg = shift // "";
@@ -118,9 +133,10 @@ for my $job ( @jobs ) {
 
       my $result = PMAT::Bench::Runner->run(
          $job->{path},
-         phases        => \@phases,
-         progress      => $progress,
-         load_progress => $load_progress,
+         phases          => \@phases,
+         progress        => $progress,
+         load_progress   => $load_progress,
+         largest_counts  => \@largest_counts,
       );
       $progress->("") if $progress;
 
@@ -149,15 +165,28 @@ if ( $json_out ) {
 
 # Summary table across jobs
 if ( @all_results > 1 && !$quiet ) {
-   print "\nSummary (load + inrefs):\n";
-   printf "%-12s %10s %10s %12s %12s\n", "label", "dump", "SVs", "load", "inrefs";
+   my $has_lo = grep { $_->{phases}{largest_owned} } @all_results;
+   my $has_lg = grep { $_->{phases}{largest} } @all_results;
+   print "\nSummary (load + inrefs"
+      . ( $has_lg ? " + largest" : "" )
+      . ( $has_lo ? " + largest_owned" : "" )
+      . "):\n";
+   printf "%-12s %10s %10s %12s %12s", "label", "dump", "SVs", "load", "inrefs";
+   printf " %14s", "largest" if $has_lg;
+   printf " %14s", "largest_owned" if $has_lo;
+   print "\n";
    for my $r ( @all_results ) {
-      printf "%-12s %10s %10s %12s %12s\n",
+      printf "%-12s %10s %10s %12s %12s",
          $r->{label},
          format_bytes( $r->{bytes} ),
          $r->{heap_svs} // '?',
          format_duration( $r->{phases}{load}{seconds} ),
          format_duration( $r->{phases}{inrefs}{seconds} // 0 );
+      printf " %14s", format_duration( $r->{phases}{largest}{seconds} // 0 )
+         if $has_lg;
+      printf " %14s", format_duration( $r->{phases}{largest_owned}{seconds} // 0 )
+         if $has_lo;
+      print "\n";
    }
 }
 
@@ -186,13 +215,19 @@ Usage: run-bench [options]
   --json, -j PATH     Write full results as JSON
   --phases LIST       Comma list (default: load,inrefs,heap_walk,count,
                       sizes_struct,reachability,identify)
-  --owned             Also run sizes_owned (sampled; expensive)
+  --owned             Also run sizes_owned (sampled owned_size; expensive)
+  --largest           Also run shipped `largest` (top-K by SV size)
+  --largest-owned     Also run shipped `largest --owned` (top-K by owned_size)
+  --largest-counts L  Top-K tree counts for largest* (default: 5,3,2)
   --force-gen         Regenerate fixtures
   --target-bytes N    Override huge synthetic size (256M, 2G, 17G, ...)
   --load-progress     Show load progress callbacks
   --iterations, -n N  Repeat each job N times
   --quiet, -q
   --help, -h
+
+  Phases: load inrefs heap_walk count sizes_struct sizes_owned
+          largest largest_owned reachability identify
 
 Environment:
   PMAT_BENCH_SIZE     Default for --size

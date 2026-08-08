@@ -130,6 +130,27 @@ Measured forced-rust, `PMAT_IDX=0` (post CSR-inrefs pullback for oracle parity):
 
 **Residual:** full `heap()` materialize + display-tree `owned_set` expansion.
 
+### Bench harness: `largest` / `largest_owned` (v0.56.0 → current)
+
+Phases added to `./bench/run-bench` (opt-in; not default suite):
+
+```bash
+./bench/run-bench --size=small,medium --phases=load,largest,largest_owned \
+  --json=bench/results/largest.json
+# or: --largest --largest-owned --largest-counts=5,3,2
+```
+
+Both phases drive the **shipped** `run_command` path (`largest` / `largest --owned` with tree counts K=5/3/2).
+
+| Tier | Phase | **v0.56.0** (before OPT-10) | **Current** (OPT-10) | Speedup |
+|------|-------|----------------------------|----------------------|---------|
+| small (143k) | `largest` | 3.13 s | **0.31 s** | **~10×** |
+| small | `largest_owned` | **134 s** | **11.4 s** | **~12×** |
+| medium (666k) | `largest` | 14.3 s | **1.54 s** | **~9×** |
+| medium | `largest_owned` | **843 s** (~14 min) | **72 s** | **~12×** |
+
+Measured forced-rust, same fixtures (`small-mixed-n5000`, `medium-mixed-n25000`), `PMAT_IDX=0`. Before: git worktree at tag `v0.56.0`. After: tree with OPT-10 top-K + owned memoization.
+
 ### OPT-01 — Lazy SV proxies on forced-Rust load  **[P0 — DONE]**
 
 | | |
