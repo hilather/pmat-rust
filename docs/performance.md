@@ -208,16 +208,29 @@ Measured forced-rust, same fixtures (`small-mixed-n5000`, `medium-mixed-n25000`)
 
 ### After native top-K FFI + parallel scores + nested CSR tree (2026-08-11)
 
-| Path | Before (medium) | After (medium) | Notes |
-|------|-----------------|----------------|-------|
-| **`owned_sizes` (serial `PMAT_OWNED_THREADS=1`)** | ~0.36 s | **~0.36 s** | same algorithm |
-| **`owned_sizes` (parallel default)** | ~0.36 s | **~0.25–0.27 s** | ~1.3–1.4× on 12-core host; 0 mismatches vs serial |
-| **Legacy ranking glue** (sizes + addr×N + Perl top-K) | **~0.67 s** | — | retired for `largest --owned` |
-| **`pmat_owned_topk(5)`** | — | **~0.27 s** | scores+rank in core; no full Perl addr table |
-| **`largest --owned 5 3 2`** (nested) | **~60–72 s** (classic tree) | **~0.68–0.80 s** | mat +12 proxies (1481→1493 / 666k) |
-| **`largest --owned 5`** (defaults still nest 3,2) | same cliff | **~0.70 s** | of which via CSR exclusive descendants |
+**Formal harness** (`./bench/run-bench --phases=load,largest,largest_owned`,
+`PMAT_BACKEND=rust`, `PMAT_IDX=0`, counts 5/3/2):
 
-**Shipped path:** `pmat_owned_largest_tree` (parallel `owned_sizes` + multi-level exclusive-descendant top-K). Sizes materializes **only printed nodes**. `PMAT_OWNED_FULL=1` restores classic full-heap + `owned_set` tree. `PMAT_OWNED_THREADS=N` forces worker count (1 = serial).
+JSON: [`bench/results/largest-owned-native-tree.json`](https://github.com/hilather/pmat-rust/blob/main/bench/results/largest-owned-native-tree.json) ·
+write-up: [`bench/results/baseline/largest-owned-native-tree.md`](https://github.com/hilather/pmat-rust/blob/main/bench/results/baseline/largest-owned-native-tree.md)
+
+| Tier | load | largest | **largest_owned** | Prior formal largest_owned (OPT-10) |
+|------|------|---------|-------------------|-------------------------------------|
+| small (143k) | 0.224 s | 0.314 s | **0.076 s** | 11.36 s (~149×) |
+| medium (666k) | 1.063 s | 1.872 s | **0.803 s** | 72.2 s (~90×) |
+
+v0.56 formal medium `largest_owned` was **843 s** (see
+`bench/results/baseline/largest-topk-v056-vs-current.md`).
+
+**Core-only micro-splits** (same host; not harness phases): parallel
+`owned_sizes` ~0.26 s vs serial ~0.35 s on medium (`PMAT_OWNED_THREADS=1`);
+`pmat_owned_topk(5)` ~0.26 s. Nested mat stays sparse (load roots + printed
+nodes only; e.g. medium ~1481→1493 / 666k).
+
+**Shipped path:** `pmat_owned_largest_tree` (parallel `owned_sizes` + multi-level
+exclusive-descendant top-K). Sizes materializes **only printed nodes**.
+`PMAT_OWNED_FULL=1` restores classic full-heap + `owned_set` tree.
+`PMAT_OWNED_THREADS=N` forces worker count (1 = serial).
 
 **Native owned ranking residual:** `Dump::owned_sizes` uses dense CSR strong exclusive children after 0.54-aligned strength fixes (ARRAY AvREAL, CODE stash/glob/outside/pads). Exact native==classic owned score is asserted on a **controlled exclusive AV root** (`t/100-oom-hotpath.t`). On mixed micro fixtures (gitignored, regenerated in CI), require classic top-1 ∈ native top-5 and ≥3/5 top-K address overlap — ranks 4–5 can still swap when CSR under-counts STASH exclusive kids. Nested “of which” uses the same CSR exclusive digraph (multi-parent diamonds can list overlapping large kids); not a full 0.54 `owned_set` byte-match when residual edges remain.
 

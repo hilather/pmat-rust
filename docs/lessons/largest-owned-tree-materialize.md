@@ -22,7 +22,12 @@ printed nodes (~0.7 s medium, +~12 proxies).
 - Parallel `owned_sizes` (`PMAT_OWNED_THREADS`); `pmat_owned_topk` /
   `pmat_owned_largest_tree` FFI; Sizes uses tree path for default
   `largest --owned` (including 5 3 2).
-- Medium nested: **~0.68 s**, mat 1481→1493 / 666k; “of which” present.
+- **Formal harness** medium `largest_owned` **0.803 s** (was 72.2 s OPT-10);
+  small **0.076 s** (was 11.36 s). See
+  `bench/results/largest-owned-native-tree.json` and
+  `bench/results/baseline/largest-owned-native-tree.md`.
+- Nested mat stays sparse (printed nodes only); “of which” present without
+  `PMAT_OWNED_FULL`.
 - `PMAT_OWNED_FULL=1` restores classic full-heap `owned_set` tree.
 
 ## What was tried (and rejected as default)
