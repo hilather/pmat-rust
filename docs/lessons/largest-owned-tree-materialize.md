@@ -32,8 +32,9 @@ is a huge fraction of the heap; each exclusive child is materialized via
 - Precompute owned scores in Rust (`Dump::owned_sizes` with 0.54-aligned CSR
   strong exclusive kids); materialize only top-K roots; print **top-level**
   list (no nested 3/2 tree).
-- Top-K **address set** must match classic ranking (see `t/100-oom-hotpath.t`);
-  absolute scores may still drift slightly where CSR residual edges remain.
+- Exact native==classic score on controlled exclusive roots; micro top-K needs
+  useful overlap (≥3/5), not exact set — CSR residual can swap tail ranks on
+  regenerated mixed dumps (CI EL8). See `t/100-oom-hotpath.t`.
 - `PMAT_OWNED_FULL=1` restores classic full-heap path (deep tree + full
   materialize).
 

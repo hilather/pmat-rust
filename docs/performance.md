@@ -185,8 +185,8 @@ Measured forced-rust, same fixtures (`small-mixed-n5000`, `medium-mixed-n25000`)
 | | |
 |--|--|
 | **Problem** | Full-heap tools re-walk proxies; structural/owned size and reachability do not use dense graph. |
-| **Shipped** | Rust `Dump::owned_sizes` + `pmat_owned_sizes` / Core `owned_sizes` with 0.54-aligned CSR strong exclusive kids; `largest --owned` uses dense precompute + top-K materialize only. Top-K **set** parity tested vs classic. |
-| **Residual** | Absolute owned scores may drift slightly where CSR still ≠ full 0.54 edges; nested owned display tree still expensive (`PMAT_OWNED_FULL`); structural size / reachability / find native still open. |
+| **Shipped** | Rust `Dump::owned_sizes` + `pmat_owned_sizes` / Core `owned_sizes` with 0.54-aligned CSR strong exclusive kids; `largest --owned` uses dense precompute + top-K materialize only. Exact score parity on exclusive AV roots; micro top-K **overlap** (≥3/5) vs classic. |
+| **Residual** | Absolute owned scores / tail of top-K may drift where CSR still ≠ full 0.54 edges (regenerated micro dumps on EL8 can swap ranks 4–5); nested owned display tree still expensive (`PMAT_OWNED_FULL`); structural size / reachability / find native still open. |
 | **Accept** | Structural sizes and reachability classes match 0.54 on fixture set |
 
 ### OPT-05 — Identify without full heap  **[DONE — strong path]**
@@ -206,7 +206,7 @@ Measured forced-rust, same fixtures (`small-mixed-n5000`, `medium-mixed-n25000`)
 | **identify** (strong) | full heap + ~seconds | **~0.00 s** | **~0.02 s** | walk set only (~1.5k) |
 | **largest --owned** | **~72 s** (v0.57 tree) / **843 s** (v0.56) | **~0.9 s** | **~0.14 s** | top-K only (~few proxies) |
 
-**Native owned ranking residual:** `Dump::owned_sizes` uses dense CSR strong exclusive children after 0.54-aligned strength fixes (ARRAY AvREAL, CODE stash/glob/outside/pads). **Top-K address set** matches classic `owned_size` ranking on fixtures (`t/100-oom-hotpath.t`). Absolute scores can still differ slightly on some STASH graphs (remaining CSR edge residual); display uses native scores. Deep nested owned tree still requires `PMAT_OWNED_FULL=1` (classic full materialize).
+**Native owned ranking residual:** `Dump::owned_sizes` uses dense CSR strong exclusive children after 0.54-aligned strength fixes (ARRAY AvREAL, CODE stash/glob/outside/pads). Exact native==classic owned score is asserted on a **controlled exclusive AV root** (`t/100-oom-hotpath.t`). On mixed micro fixtures (gitignored, regenerated in CI), require classic top-1 ∈ native top-5 and ≥3/5 top-K address overlap — ranks 4–5 can still swap when CSR under-counts STASH exclusive kids. Display uses native scores. Deep nested owned tree still requires `PMAT_OWNED_FULL=1` (classic full materialize).
 
 Residual: `largest --owned` default shows **top-level** list under rust native path. Global classic inrefs still full-heap when loaded without lazy request.
 
