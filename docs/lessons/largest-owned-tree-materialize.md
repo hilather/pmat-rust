@@ -24,7 +24,7 @@ printed nodes (~0.7 s medium, +~12 proxies).
   `largest --owned` (including 5 3 2).
 - **Formal harness** medium `largest_owned` **0.803 s** (was 72.2 s OPT-10);
   small **0.076 s** (was 11.36 s). See
-  `bench/results/largest-owned-native-tree.json` and
+  `bench/results/baseline/largest-owned-native-tree.json` and
   `bench/results/baseline/largest-owned-native-tree.md`.
 - Nested mat stays sparse (printed nodes only); “of which” present without
   `PMAT_OWNED_FULL`.

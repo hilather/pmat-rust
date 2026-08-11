@@ -211,7 +211,7 @@ Measured forced-rust, same fixtures (`small-mixed-n5000`, `medium-mixed-n25000`)
 **Formal harness** (`./bench/run-bench --phases=load,largest,largest_owned`,
 `PMAT_BACKEND=rust`, `PMAT_IDX=0`, counts 5/3/2):
 
-JSON: [`bench/results/largest-owned-native-tree.json`](https://github.com/hilather/pmat-rust/blob/main/bench/results/largest-owned-native-tree.json) ·
+JSON: [`bench/results/baseline/largest-owned-native-tree.json`](https://github.com/hilather/pmat-rust/blob/main/bench/results/baseline/largest-owned-native-tree.json) ·
 write-up: [`bench/results/baseline/largest-owned-native-tree.md`](https://github.com/hilather/pmat-rust/blob/main/bench/results/baseline/largest-owned-native-tree.md)
 
 | Tier | load | largest | **largest_owned** | Prior formal largest_owned (OPT-10) |

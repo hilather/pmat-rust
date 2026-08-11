@@ -10,10 +10,10 @@ PMAT_BACKEND=rust PMAT_IDX=0 \
   ./bench/run-bench --size=small,medium \
   --phases=load,largest,largest_owned \
   --largest-counts=5,3,2 \
-  --json=bench/results/largest-owned-native-tree.json
+  --json=bench/results/baseline/largest-owned-native-tree.json
 ```
 
-JSON: [`bench/results/largest-owned-native-tree.json`](https://github.com/hilather/pmat-rust/blob/main/bench/results/largest-owned-native-tree.json)
+JSON: [`bench/results/baseline/largest-owned-native-tree.json`](https://github.com/hilather/pmat-rust/blob/main/bench/results/baseline/largest-owned-native-tree.json)
 
 ## Results (this run)
 
