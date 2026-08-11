@@ -56,11 +56,12 @@ scratch during investigation, not here.
 | 2026-08-07 | OPT-03 pure-CSR inrefs (strengths + scalar count) | failed / residual | [opt-03-csr-inrefs](opt-03-csr-inrefs.md) |
 | 2026-08-07 | Owned-size child-sum DP unsafe (multi-parent exclusive digraph) | failed approach | [owned-size-child-sum-dp](owned-size-child-sum-dp.md) |
 | 2026-08-07 | CODE `"the glob"` / protosub edges depend on Perl hash perturbation | semantics | [perl-hash-perturb-glob-edges](perl-hash-perturb-glob-edges.md) |
+| 2026-08-11 | largest --owned deep tree forces near-full materialize | residual | [largest-owned-tree-materialize](largest-owned-tree-materialize.md) |
 
 ---
 
 ## Quick scan (agents: read before retrying an OPT)
 
-- **Inrefs:** do not ship pure CSR reverse for 0.54 parity; structural CSR ≠ weak array/CODE glob edges; scalar `inrefs_*` must match list after re-filter.
-- **owned_size:** never sum child `owned_size` (diamond over-count); classic `%seen` walk only.
+- **Inrefs:** do not ship pure CSR reverse for 0.54 parity; structural CSR ≠ weak array/CODE glob edges; scalar `inrefs_*` must match list after re-filter. Lazy on-demand (Identify) re-filters CSR candidates; full classic remains default for the Inrefs tool.
+- **owned_size:** never sum child `owned_size` (diamond over-count); classic `%seen` walk only. Prefer Rust `owned_sizes` for ranking; deep `owned_set` trees still materialize heavily.
 - **Cross-backend edge multisets:** fix `PERL_HASH_SEED` + `PERL_PERTURB_KEYS=0` in child processes when comparing perl vs rust outrefs/inrefs oracles.

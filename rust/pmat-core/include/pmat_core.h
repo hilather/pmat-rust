@@ -88,6 +88,13 @@ int pmat_inrefs_batch(const pmat_dump *dump, uint32_t id,
 uint64_t pmat_forward_edge_count(const pmat_dump *dump);
 uint64_t pmat_reverse_edge_count(const pmat_dump *dump);
 
+/*
+ * Classic owned_size (%%seen walk over strong exclusive children) for every
+ * heap ObjectId. out_sizes must have room for pmat_heap_count entries.
+ * Returns 0 on success.
+ */
+int pmat_owned_sizes(const pmat_dump *dump, uint64_t *out_sizes, size_t out_len);
+
 /* Last error message (thread-local / static buffer). Valid until next call. */
 const char *pmat_last_error(void);
 

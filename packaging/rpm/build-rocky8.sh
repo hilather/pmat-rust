@@ -17,7 +17,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-VERSION="${PMAT_VERSION:-0.57.0}"
+VERSION="${PMAT_VERSION:-0.58.0}"
 RELEASE="${PMAT_RELEASE:-1}"
 DIST_TAG="${PMAT_DIST:-.el8}"
 ARCH="$(uname -m)"

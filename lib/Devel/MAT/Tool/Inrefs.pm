@@ -34,11 +34,16 @@ that refer to it. It follows the C<outrefs> method of every heap SV and
 annotates the referred SVs with back-references pointing back to the SVs that
 refer to them.
 
-B<Note:> Dense CSR reverse edges are a structural subset of 0.54 C<outrefs>
-(e.g. CODE C<"the glob"> may be strong in Perl but absent from the CSR). For
-oracle parity this tool always builds the reverse index from proxy
-C<outrefs> (classic walk). A pure-CSR path remains residual until the dense
-graph includes the full 0.54 edge set.
+B<Note:> Under forced Rust, reverse edges are built B<on demand> for each SV
+(CSR reverse candidates + re-filter via proxy C<outrefs> for 0.54 strengths
+and names). This avoids a full-heap materialize for interactive tools such as
+C<identify>. Set C<PMAT_INREFS_FULL=1> to force the classic full outref walk
+at tool init (oracle / differential debugging).
+
+Dense CSR reverse alone is a structural subset of 0.54 C<outrefs> (e.g. CODE
+C<"the glob"> may be absent). On-demand re-filter restores 0.54 strength for
+edges that appear as CSR candidates; pure-CSR without re-filter remains
+residual (see F<docs/lessons/opt-03-csr-inrefs.md>).
 
 =cut
 
@@ -48,25 +53,18 @@ sub init_tool
 
    my $df = $self->df;
 
-   # Classic outref walk — required for 0.54 strength + edge completeness.
-   # (CSR reverse alone loses weak/strong classification and some edges.)
-   my $heap_total = scalar $df->heap;
-   my $count = 0;
-   foreach my $sv ( $df->heap ) {
-      foreach ( pairs $sv->outrefs( "NO_DESC" ) ) {
-         my ( $strength, $refsv ) = @$_;
+   # Lazy on-demand reverse is opt-in (Identify sets _want_inrefs_lazy under rust).
+   # Default remains classic full walk so inrefs/oracle tools stay complete.
+   my $force_full = $ENV{PMAT_INREFS_FULL}
+      && $ENV{PMAT_INREFS_FULL} !~ /^(0|false|off|no)$/i;
+   my $want_lazy = !$force_full && $df->{_want_inrefs_lazy};
 
-         push @{ $refsv->{tool_inrefs}[ $STRENGTH_TO_IDX{ $strength } ] }, $sv->addr if !$refsv->immortal;
-      }
+   my $can_lazy = $want_lazy
+      && $df->can('rust_core') && $df->rust_core
+      && $df->rust_core->can('inrefs_batch')
+      && $df->rust_core->can('id_for_addr');
 
-      $count++;
-      $self->report_progress( sprintf "Patching refs in %d of %d (%.2f%%)",
-         $count, $heap_total, 100*$count / $heap_total ) if ($count % 10000) == 0
-   }
-
-   # Most SVs are not roots or on the stack. To save time later on we'll make
-   #   a note of those rare ones that are
-
+   # Roots / stack only (cheap; few SVs). Required for both paths.
    foreach ( pairs $df->roots_strong ) {
       my ( undef, $sv ) = @$_;
       next unless $sv;
@@ -83,7 +81,106 @@ sub init_tool
       $sv->{tool_inrefs}[IDX_STACK]++;
    }
 
+   if ( $can_lazy ) {
+      # On-demand reverse edges via _ensure_inrefs_built (identify walk set).
+      $df->{_inrefs_lazy} = 1;
+      $self->report_progress();
+      return;
+   }
+
+   # Classic outref walk — full heap materialize + complete 0.54 edge set.
+   $df->{_inrefs_lazy} = 0;
+   my $heap_total = scalar $df->heap;
+   my $count = 0;
+   foreach my $sv ( $df->heap ) {
+      foreach ( pairs $sv->outrefs( "NO_DESC" ) ) {
+         my ( $strength, $refsv ) = @$_;
+
+         push @{ $refsv->{tool_inrefs}[ $STRENGTH_TO_IDX{ $strength } ] }, $sv->addr if !$refsv->immortal;
+      }
+
+      $count++;
+      $self->report_progress( sprintf "Patching refs in %d of %d (%.2f%%)",
+         $count, $heap_total, 100*$count / $heap_total ) if ($count % 10000) == 0
+   }
+
    $self->report_progress();
+}
+
+# Force classic full reverse index once (materializes full heap). Used when
+# weak/indirect/inferred are requested — CSR reverse is incomplete for those.
+sub Devel::MAT::Dumpfile::_inrefs_force_classic_full
+{
+   my $df = shift;
+   return if $df->{_inrefs_classic_done};
+   $df->{_inrefs_lazy} = 0;
+
+   my $heap_total = scalar $df->heap;
+   my $count      = 0;
+   foreach my $sv ( $df->heap ) {
+      # Clear partial lazy slots (keep roots/stack indices 4..6).
+      if ( my $ti = $sv->{tool_inrefs} ) {
+         $ti->[0] = $ti->[1] = $ti->[2] = $ti->[3] = undef;
+      }
+      delete $sv->{tool_inrefs_ready};
+      foreach ( pairs $sv->outrefs( "NO_DESC" ) ) {
+         my ( $strength, $refsv ) = @$_;
+         push @{ $refsv->{tool_inrefs}[ $STRENGTH_TO_IDX{$strength} ] }, $sv->addr
+            if $refsv && !$refsv->immortal;
+      }
+      $count++;
+   }
+   for my $sv ( $df->heap ) {
+      $sv->{tool_inrefs_ready} = 1;
+   }
+   $df->{_inrefs_classic_done} = 1;
+}
+
+# Build heap reverse slots for one SV under forced-Rust lazy mode (strong path).
+# Candidates from dense reverse CSR; 0.54 strength/name via source outrefs re-filter.
+sub Devel::MAT::SV::_ensure_inrefs_built
+{
+   my $self = shift;
+   return if $self->{tool_inrefs_ready};
+
+   my $df = $self->df;
+   unless ( $df && $df->{_inrefs_lazy} ) {
+      $self->{tool_inrefs_ready} = 1;
+      return;
+   }
+
+   if ( $self->immortal ) {
+      $self->{tool_inrefs_ready} = 1;
+      return;
+   }
+
+   my $core = $df->rust_core;
+   my $id   = $core->id_for_addr( $self->addr );
+   $self->{tool_inrefs} ||= [];
+
+   if ( defined $id && $id != 0xFFFFFFFF ) {
+      my $batch = $core->inrefs_batch($id);
+      my %seen_src;
+      for my $row ( @{ $batch // [] } ) {
+         next unless ref($row) eq 'ARRAY';
+         my ( $src_id, undef ) = @$row;
+         next unless defined $src_id;
+         next if $seen_src{$src_id}++;
+
+         my $src_meta = $core->object_at($src_id) or next;
+         next unless ref($src_meta) eq 'ARRAY';
+         my $src_addr = $src_meta->[0];
+         my $src      = $df->sv_at($src_addr) or next;
+
+         foreach ( pairs $src->outrefs( "NO_DESC" ) ) {
+            my ( $strength, $refsv ) = @$_;
+            next unless $refsv && $refsv == $self;
+            push @{ $self->{tool_inrefs}[ $STRENGTH_TO_IDX{$strength} ] }, $src->addr;
+         }
+      }
+   }
+
+   $self->{tool_inrefs_ready} = 1;
 }
 
 =head1 SV METHODS
@@ -131,15 +228,26 @@ sub Devel::MAT::SV::_inrefs
    #   just count them. This allows a lot of optimisations.
    my $just_count = !wantarray;
 
+   my $df = $self->df;
+   if ( $df && $df->{_inrefs_lazy} ) {
+      # CSR reverse + outrefs re-filter is good for strong (and many weak) edges.
+      # Indirect/inferred 0.54 edges may be absent from CSR — use classic full walk.
+      if ( any { $_ eq 'indirect' || $_ eq 'inferred' } @strengths ) {
+         $df->_inrefs_force_classic_full;
+      }
+      else {
+         $self->_ensure_inrefs_built;
+      }
+   }
    $self->{tool_inrefs} ||= [];
 
-   my $df = $self->df;
+   $df = $self->df;
    my @inrefs;
    foreach my $strength ( @strengths ) {
       my %seen;
       foreach my $addr ( @{ $self->{tool_inrefs}[ $STRENGTH_TO_IDX{$strength} ] // [] } ) {
          if( $just_count ) {
-            # Classic path: slots are pre-bucketed by 0.54 strength during init,
+            # Slots are pre-bucketed by 0.54 strength (classic walk or lazy re-filter),
             # so counting slot entries matches list context after re-filter
             # (each push is one outref edge of that strength).
             push @inrefs, 1;

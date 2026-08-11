@@ -33,6 +33,7 @@ extern uint8_t pmat_type_for_id(const pmat_dump *dump, uint32_t id);
 extern uint32_t pmat_refcnt_for_id(const pmat_dump *dump, uint32_t id);
 extern uint64_t pmat_size_for_id(const pmat_dump *dump, uint32_t id);
 extern uint64_t pmat_blessed_for_id(const pmat_dump *dump, uint32_t id);
+extern int pmat_owned_sizes(const pmat_dump *dump, uint64_t *out_sizes, size_t out_len);
 extern int pmat_outrefs_batch(const pmat_dump *dump, uint32_t id,
                               uint32_t *target_ids, uint8_t *strengths,
                               size_t max_edges, size_t *out_n);
@@ -436,6 +437,31 @@ inrefs_batch(self, id)
       }
       Safefree(sources);
       Safefree(strengths);
+    }
+    PUSHs(sv_2mortal(newRV_noinc((SV *)av)));
+
+void
+owned_sizes(self)
+    SV *self
+  PREINIT:
+    pmat_handle *h;
+    uint32_t n, i;
+    uint64_t *sizes = NULL;
+    AV *av;
+  PPCODE:
+    h = INT2PTR(pmat_handle *, SvIV((SV *)SvRV(self)));
+    n = pmat_heap_count(h->dump);
+    av = newAV();
+    if (n) {
+      Newx(sizes, n, uint64_t);
+      if (pmat_owned_sizes(h->dump, sizes, (size_t)n) != 0) {
+        Safefree(sizes);
+        croak("pmat_owned_sizes failed: %s", pmat_last_error());
+      }
+      av_extend(av, n - 1);
+      for (i = 0; i < n; i++)
+        av_store(av, i, newSVuv((UV)sizes[i]));
+      Safefree(sizes);
     }
     PUSHs(sv_2mortal(newRV_noinc((SV *)av)));
 

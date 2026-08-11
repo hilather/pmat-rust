@@ -52,6 +52,19 @@ scalar context overcounted.
 - Scalar path re-filters or counts the same multiset as list, **and**
 - `t/10tool-inrefs.t` + `t/99-hotpath-lazy.t` inrefs section stay green.
 
+## Partial edge-strength fixes (2026-08-11)
+
+Shipped for owned ranking / identify candidates (still not full OPT-03):
+
+- ARRAY body elems: **weak** when `array_flags & 0x01` (Av not REAL / is_unreal);
+  **strong** when REAL (matches `SV::ARRAY::_outrefs`).
+- CODE ptrs: STASH weak; GLOB weak unless CVGV_RC; OUTSIDE weak if WEAKOUTSIDE;
+  PADLIST/CONSTVAL strong; body consts/gvs strong or indirect under ithreads;
+  padnames/pads indirect when PADLIST present.
+
+Remaining CSR≠0.54 edges still cause absolute owned score drift on some STASHes;
+top-K **sets** are tested against classic.
+
 ## Related tests / code
 
 - `lib/Devel/MAT/Tool/Inrefs.pm` (classic walk + residual note)

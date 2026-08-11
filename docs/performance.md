@@ -94,14 +94,14 @@ volume. Checkboxes: `[x]` done in-tree, `[ ]` still open.
 
 - [x] **OPT-01** — Lazy SV proxies on forced-Rust load (on-demand `sv_at` / `rust_proxy_for_id`; `heap()` full materialize; one proxy per ObjectId)
 - [x] **OPT-02** — Default `count` without full proxy walk (dense `object_at` + CODE pad reclass; option modes still walk)
-- [ ] **OPT-03** — Inrefs CSR first-use (residual: dense reverse graph lacks some 0.54 edges e.g. CODE "the glob"; classic outref walk retained for oracle parity)
-- [ ] **OPT-04** — Sizes / reachability / find on native model (partial: owned_size memoization shipped; native CSR still open)
-- [ ] **OPT-05** — Identify / outrefs / show on batch edges (materialize walk set only)
+- [ ] **OPT-03** — Global inrefs without full classic walk (partial: **lazy on-demand** for identify strong path; full classic still default for Inrefs tool / weak+indirect)
+- [ ] **OPT-04** — Sizes / reachability / find on native model (partial: owned_size memoization + **Rust `owned_sizes` for largest --owned**)
+- [x] **OPT-05** — Identify without full heap (lazy inrefs on walk set; strong path)
 - [ ] **OPT-06** — Cheap / stub proxies for graph-only walks
 - [ ] **OPT-07** — Reduce dual-residency memory (core + Perl)
 - [ ] **OPT-08** — Hash outref O(K²) path
 - [x] **OPT-09** — Index size gate (default skip fat `.pmat.idx` under 64 MiB unless `PMAT_IDX=1`)
-- [x] **OPT-10** — Top-K / largest without full Fibonacci heap; correct cached `owned_size`
+- [x] **OPT-10** — Top-K / largest; **native owned precompute** for `largest --owned` (top-level list; deep tree residual)
 - [ ] **OPT-11** — Huge / production scaling gates
 - [x] **OPT-12** — Measure & guard regressions
 
@@ -171,34 +171,44 @@ Measured forced-rust, same fixtures (`small-mixed-n5000`, `medium-mixed-n25000`)
 | **Files** | `lib/Devel/MAT/Tool/Count.pm`; `t/99-hotpath-lazy.t` |
 | **Accept** | Default table matches 0.54 type reclassification (PAD/BOOL/…); option modes unchanged |
 
-### OPT-03 — Batch / native inrefs build  **[OPEN — residual]**
+### OPT-03 — Batch / native inrefs build  **[OPEN — partial]**
 
 | | |
 |--|--|
-| **Problem** | Inrefs first-use walks every proxy outref (materialize + full scan). Medium ~14–17 s after classic restore. |
-| **Attempt** | CSR reverse candidates alone miss 0.54 edges (e.g. CODE `"the glob"`) and structural strength ≠ weak array/CODE globs; pure-CSR lost weak edges and broke scalar/list count parity. |
-| **Current** | Classic outref walk retained for oracle parity (`t/10tool-inrefs.t`, `t/99-hotpath-lazy.t` reverse rebuild + fixed-hash-seed perl oracle). |
-| **Next** | Extend dense edge builder to emit full 0.54 strong/weak set, then re-enable CSR reverse + outrefs re-filter. |
+| **Problem** | Global inrefs first-use walks every proxy outref (materialize + full scan). |
+| **Shipped** | **Lazy on-demand** reverse for Identify (strong path): CSR `inrefs_batch` candidates + re-filter via proxy `outrefs`. Default `load_tool(Inrefs)` stays classic full for oracle tools. |
+| **Residual** | Weak/indirect/inferred completeness still needs classic full (`PMAT_INREFS_FULL` or automatic when those strengths are requested). Global first-use pause remains for full-index tools. |
+| **Next** | Full 0.54 edge set in dense builder → lazy complete for all strengths. |
 
-### OPT-04 — Sizes / reachability / find on native model  **[P1]**
+### OPT-04 — Sizes / reachability / find on native model  **[PARTIAL]**
 
 | | |
 |--|--|
 | **Problem** | Full-heap tools re-walk proxies; structural/owned size and reachability do not use dense graph. |
-| **Change** | Native structural size + reachability labels over CSR; Find filters by type/addr without materializing all SVs. Owned size may stay sampled or lazy. |
-| **Files** | `Tool/Sizes.pm`, `Tool/Reachability.pm`, `Tool/Find.pm`, pmat-core FFI |
-| **Target** | Tool phases improve once OPT-01 avoids forced materialize-on-heap |
+| **Shipped** | Rust `Dump::owned_sizes` + `pmat_owned_sizes` / Core `owned_sizes` with 0.54-aligned CSR strong exclusive kids; `largest --owned` uses dense precompute + top-K materialize only. Top-K **set** parity tested vs classic. |
+| **Residual** | Absolute owned scores may drift slightly where CSR still ≠ full 0.54 edges; nested owned display tree still expensive (`PMAT_OWNED_FULL`); structural size / reachability / find native still open. |
 | **Accept** | Structural sizes and reachability classes match 0.54 on fixture set |
 
-### OPT-05 — Identify / outrefs / show on batch edges  **[P1]**
+### OPT-05 — Identify without full heap  **[DONE — strong path]**
 
 | | |
 |--|--|
-| **Problem** | Referrer walks still go through Perl outref/inref methods after materialization. |
-| **Change** | Prefer `outrefs_batch` / `inrefs_batch` for edge lists; materialize only SVs that appear in the walk / display set. |
-| **Files** | `Tool/Identify.pm`, `Tool/Outrefs.pm`, `Tool/Show.pm`, Graph helpers |
-| **Target** | Interactive identify on huge dumps without full heap materialize |
-| **Accept** | Identify paths and strength/desc match oracle |
+| **Problem** | Identify loaded full Inrefs → full `heap()` materialize. |
+| **Change** | Identify sets `_want_inrefs_lazy` under rust (strong path); on-demand CSR candidates + outrefs re-filter for walk set only. |
+| **Files** | `Tool/Identify.pm`, `Tool/Inrefs.pm`; `t/100-oom-hotpath.t` |
+| **Measured** | small identify **2.7 s → 0.02 s**, mat **143k → ~1.3k**; medium **~full heap → 0.00 s**, mat **~1.5k** |
+| **Accept** | Identify paths usable without full heap; materialize ≪ heap_count |
+
+### After OPT-05 / native largest --owned (2026-08-11)
+
+| Path | Before (medium) | After (medium) | After (small) | Materialize |
+|------|-----------------|----------------|---------------|-------------|
+| **identify** (strong) | full heap + ~seconds | **~0.00 s** | **~0.02 s** | walk set only (~1.5k) |
+| **largest --owned** | **~72 s** (v0.57 tree) / **843 s** (v0.56) | **~0.9 s** | **~0.14 s** | top-K only (~few proxies) |
+
+**Native owned ranking residual:** `Dump::owned_sizes` uses dense CSR strong exclusive children after 0.54-aligned strength fixes (ARRAY AvREAL, CODE stash/glob/outside/pads). **Top-K address set** matches classic `owned_size` ranking on fixtures (`t/100-oom-hotpath.t`). Absolute scores can still differ slightly on some STASH graphs (remaining CSR edge residual); display uses native scores. Deep nested owned tree still requires `PMAT_OWNED_FULL=1` (classic full materialize).
+
+Residual: `largest --owned` default shows **top-level** list under rust native path. Global classic inrefs still full-heap when loaded without lazy request.
 
 ### OPT-06 — Cheap / stub proxies for graph-only walks  **[P2]**
 

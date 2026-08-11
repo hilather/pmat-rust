@@ -417,6 +417,55 @@ use constant CMD_ARGS => (
      repeated => 1 },
 );
 
+# Dense-model owned sizes by ObjectId (no full Perl proxy heap).
+# Prefers Rust pmat_owned_sizes (classic %seen over strong exclusive CSR kids).
+# Returns ( \@owned_by_id, \@addr_by_id ) or empty list if unavailable.
+sub _native_owned_by_id
+{
+   my ( $df ) = @_;
+   my $core = $df->can('rust_core') && $df->rust_core;
+   return unless $core && $core->can('object_at');
+
+   my $n = $core->heap_count;
+   return unless $n;
+
+   my @addr;
+   $#addr = $n - 1;
+   for my $id ( 0 .. $n - 1 ) {
+      my $row = $core->object_at($id) or next;
+      $addr[$id] = $row->[0];
+   }
+
+   if ( $core->can('owned_sizes') ) {
+      my $owned = $core->owned_sizes;
+      return ( $owned, \@addr ) if $owned && ref($owned) eq 'ARRAY' && @$owned == $n;
+   }
+
+   return;
+}
+
+# Top-K ObjectIds by native owned size (higher score, then lower addr).
+sub _native_owned_topk_ids
+{
+   my ( $owned, $addr, $k ) = @_;
+   return () if $k <= 0;
+   my @best;  # [score, addr, id]
+   for my $id ( 0 .. $#$owned ) {
+      my $score = $owned->[$id] // 0;
+      my $ad    = $addr->[$id] // 0;
+      if ( @best < $k
+           || $score > $best[-1][0]
+           || ( $score == $best[-1][0] && $ad < $best[-1][1] ) )
+      {
+         push @best, [ $score, $ad, $id ];
+         # Do not use $a/$b lexicals here — they shadow sort's $a/$b.
+         @best = sort { $b->[0] <=> $a->[0] || $a->[1] <=> $b->[1] } @best;
+         pop @best if @best > $k;
+      }
+   }
+   return map { $_->[2] } @best;
+}
+
 sub run
 {
    my $self = shift;
@@ -431,13 +480,41 @@ sub run
    $METRIC = "structure" if $opts{struct};
    $METRIC = "owned"     if $opts{owned};
 
-   my @svs = $df->heap;
-
    my $method = $METRIC ? "${METRIC}_size" : "size";
+
+   # largest --owned under Rust: dense owned precompute + materialize only top-K
+   # (and their display trees), not the full proxy heap.
+   if ( $METRIC && $METRIC eq "owned"
+      && $df->can('rust_core') && $df->rust_core
+      && !( $ENV{PMAT_OWNED_FULL} && $ENV{PMAT_OWNED_FULL} !~ /^(0|false|off|no)$/i )
+   ) {
+      $self->report_progress( "Calculating owned sizes (native)..." );
+      my ( $owned, $addr ) = _native_owned_by_id($df);
+      $self->report_progress();
+      if ( $owned && $addr ) {
+         my $k0 = $counts[0] // 5;
+         # Materialize only the native top-K roots (plus tree expansion below).
+         # Seed owned_size cache from dense precompute — avoids N classic walks.
+         my @cand_ids = _native_owned_topk_ids( $owned, $addr, $k0 );
+         my @cand_svs;
+         for my $id ( @cand_ids ) {
+            my $sv = $df->sv_at( $addr->[$id] ) or next;
+            $sv->{tool_sizes_owned} = $owned->[$id] // 0;
+            push @cand_svs, $sv;
+         }
+         undef %seen;
+         # Top-level only: nested owned_set trees force near-full materialize on
+         # huge stashes. Residual: PMAT_OWNED_FULL=1 for classic deep tree.
+         list_largest_svs( \@cand_svs, $METRIC, "", $k0 );
+         return;
+      }
+      # fall through to classic if native unavailable
+   }
+
+   my @svs = $df->heap;
 
    my $heap_total = scalar @svs;
    if ( $METRIC && $METRIC eq "owned" ) {
-      # One O(V+E) SCC+DP pass (cycle-safe); then method hits cache.
       $self->report_progress( "Calculating owned sizes..." ) if $heap_total;
       _precompute_owned_sizes( \@svs );
       $self->report_progress();

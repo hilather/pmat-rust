@@ -265,6 +265,7 @@ sub inref_graph
    my $elide_sym = $opts{elide};
    my $elide_pad = $opts{elide};
 
+   # Preserve Identify's lazy request under rust (do not clear before load).
    $self->load_tool( "Inrefs" );
 
    if( $sv->immortal ) {

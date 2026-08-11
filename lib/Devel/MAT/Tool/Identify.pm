@@ -105,6 +105,15 @@ sub run
    $STRONG = 0              if $opts{weak};
    $STRONG = 0, $DIRECT = 0 if $opts{all};
 
+   # Forced-Rust identify: request lazy on-demand inrefs so we do not full-heap
+   # materialize just to answer one SV's reverse path (large-dump cliff).
+   my $df = $self->df;
+   if (  $df->can('rust_core') && $df->rust_core
+      && !( $opts{weak} || $opts{all} )  # strong path only; weak/all need classic completeness
+   ) {
+      $df->{_want_inrefs_lazy} = 1;
+   }
+
    $self->pmat->load_tool( "Inrefs", progress => $self->{progress} );
 
    Devel::MAT::Cmd->printf( "%s is:\n",

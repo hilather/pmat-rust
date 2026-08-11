@@ -372,6 +372,31 @@ pub extern "C" fn pmat_inrefs_batch(
     })
 }
 
+/// Fill `out_sizes[0..heap_count)` with classic owned_size per ObjectId.
+/// `out_len` must be >= heap_count. Returns 0 on success.
+#[no_mangle]
+pub extern "C" fn pmat_owned_sizes(
+    dump: *const Dump,
+    out_sizes: *mut u64,
+    out_len: usize,
+) -> i32 {
+    catch_code(|| {
+        let d = match get(dump) {
+            Ok(d) => d,
+            Err(c) => return c,
+        };
+        let n = d.heap_count as usize;
+        if out_sizes.is_null() || out_len < n {
+            set_err("pmat_owned_sizes: buffer too small or null");
+            return -7;
+        }
+        let sizes = d.owned_sizes();
+        let out = unsafe { slice::from_raw_parts_mut(out_sizes, n) };
+        out.copy_from_slice(&sizes[..n]);
+        0
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn pmat_forward_edge_count(dump: *const Dump) -> u64 {
     get(dump)

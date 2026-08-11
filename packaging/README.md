@@ -21,7 +21,7 @@ Optional environment:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `PMAT_VERSION` | `0.57.0` (or from `v*` tag) | RPM Version |
+| `PMAT_VERSION` | `0.58.0` (or from `v*` tag) | RPM Version |
 | `PMAT_RELEASE` | `1` | RPM Release |
 | `PMAT_DIST` | `.el8` | Dist tag |
 | `PMAT_RPM_SKIP_TEST` | `0` | Set `1` to skip `./Build test` |

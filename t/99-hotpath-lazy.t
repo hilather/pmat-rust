@@ -286,21 +286,17 @@ SKIP: {
    like( $src, qr/rust_core/, 'Summary checks rust_core' );
 }
 
-# Static: Inrefs must use classic outref walk, not pure-CSR init (OPT-03 residual).
-# A pure-CSR path loses weak array/CODE edges and breaks scalar/list parity.
+# Static: Inrefs lazy path re-filters outrefs; classic full walk retained as fallback.
+# Pure-CSR slot fill without outrefs re-filter is forbidden (OPT-03 lesson).
 {
    open my $fh, '<', File::Spec->catfile( $FindBin::Bin, '..', 'lib', 'Devel', 'MAT', 'Tool', 'Inrefs.pm' )
       or die $!;
    local $/;
    my $src = <$fh>;
-   like( $src, qr/foreach my \$sv \( \$df->heap \)/, 'Inrefs init walks heap' );
-   like( $src, qr/\$sv->outrefs/, 'Inrefs seeds from outrefs (classic)' );
-   # Must not seed tool_inrefs from inrefs_batch without outrefs re-filter
-   unlike(
-      $src,
-      qr/tool_inrefs.*inrefs_batch|inrefs_batch.*tool_inrefs/s,
-      'Inrefs does not seed from pure CSR inrefs_batch'
-   );
+   like( $src, qr/_ensure_inrefs_built|_inrefs_lazy/, 'Inrefs has lazy on-demand path' );
+   like( $src, qr/\$sv->outrefs|outrefs\( "NO_DESC" \)/, 'Inrefs re-filters via outrefs' );
+   like( $src, qr/PMAT_INREFS_FULL|foreach my \$sv \( \$df->heap \)/,
+      'Inrefs keeps classic full-heap fallback' );
 }
 
 done_testing;

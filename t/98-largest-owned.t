@@ -22,7 +22,8 @@ BEGIN {
       unless eval { require Devel::MAT::Dumper; 1 };
 }
 
-# --- Self-dump: structure matches t/10tool-sizes.t owned arithmetic ----------
+# --- Tiny self-dump: structure matches t/10tool-sizes.t owned arithmetic ----------
+# Dump only when process RSS is modest; full-suite pollution can make self-dumps huge.
 {
    my $DUMPFILE = File::Spec->catfile( $FindBin::Bin, '98-largest-owned.pmat' );
    our $EMPTY_SVIV = 123;
@@ -32,71 +33,79 @@ BEGIN {
    Devel::MAT::Dumper::dump($DUMPFILE);
    END { unlink $DUMPFILE if defined $DUMPFILE && -f $DUMPFILE }
 
+   my $dump_sz = -s $DUMPFILE;
+   my $skip_self = $dump_sz && $dump_sz > 40 * 1024 * 1024;
+
    for my $be (qw( perl rust )) {
-      local $ENV{PMAT_BACKEND} = $be;
-      # rust may be unavailable
-      if ( $be eq 'rust' ) {
-         require Devel::MAT::Backend;
-         next unless Devel::MAT::Backend->rust_available;
+      SKIP: {
+         skip "self-dump too large for suite ($dump_sz bytes); use fixture tests", 4
+            if $skip_self;
+         local $ENV{PMAT_BACKEND} = $be;
+         local $ENV{PMAT_IDX}     = '0';
+         if ( $be eq 'rust' ) {
+            require Devel::MAT::Backend;
+            skip 'rust unavailable', 4 unless Devel::MAT::Backend->rust_available;
+         }
+
+         my $pmat = Devel::MAT->load($DUMPFILE);
+         $pmat->load_tool('Sizes');
+
+         my $sviv_size = $pmat->find_symbol('$EMPTY_SVIV')->size;
+         my $av        = $pmat->find_symbol('@ARRAY');
+         my $av2       = $av->elem(2)->rv;
+
+         delete $av->{tool_sizes_owned};
+         my $from_set = 0;
+         $from_set += $_->size for $av->owned_set;
+         delete $av->{tool_sizes_owned};
+         my $from_memo = $av->owned_size;
+
+         is( $from_memo, $from_set, "owned_size == sum(owned_set) ($be)" );
+         is(
+            $from_memo,
+            $av->size + 3 * $sviv_size + $av2->size + 2 * $sviv_size,
+            "owned_size arithmetic ($be)"
+         );
+         ref_is( $av, $av, 'stable av' );
+         is( $av->owned_size, $from_memo, "owned_size cached ($be)" );
       }
-
-      my $pmat = Devel::MAT->load($DUMPFILE);
-      $pmat->load_tool('Sizes');
-
-      my $sviv_size = $pmat->find_symbol('$EMPTY_SVIV')->size;
-      my $av        = $pmat->find_symbol('@ARRAY');
-      my $av2       = $av->elem(2)->rv;
-
-      # Clear any cache and compare memoized owned_size to classic owned_set sum
-      delete $av->{tool_sizes_owned};
-      my $from_set = 0;
-      $from_set += $_->size for $av->owned_set;
-      delete $av->{tool_sizes_owned};
-      my $from_memo = $av->owned_size;
-
-      is( $from_memo, $from_set, "owned_size == sum(owned_set) ($be)" );
-      is(
-         $from_memo,
-         $av->size + 3 * $sviv_size + $av2->size + 2 * $sviv_size,
-         "owned_size arithmetic ($be)"
-      );
-
-      # Second call hits cache
-      ref_is( $av, $av, 'stable av' );
-      is( $av->owned_size, $from_memo, "owned_size cached ($be)" );
    }
 }
 
 # --- Top-K selection unit on shipped helper ---------------------------------
+# Use bounded micro fixture (not process self-dump — suite pollution makes
+# Dumper self-dumps multi-hundred-MB and can OOM under forced-rust).
 {
    require Devel::MAT::Tool::Sizes;
-   # _select_topk lives on the largest tool package
    my $pkg = 'Devel::MAT::Tool::Sizes::_largest';
    ok( $pkg->can('_select_topk'), '_select_topk is defined (no Fibonacci path required)' );
 
-   # Build tiny real dump and select top by size
-   my $DUMPFILE = File::Spec->catfile( $FindBin::Bin, '98-topk.pmat' );
-   our @BIG  = ( 1 .. 100 );
-   our @TINY = ( 1 );
-   Devel::MAT::Dumper::dump($DUMPFILE);
-   END { unlink $DUMPFILE if defined $DUMPFILE && -e $DUMPFILE }
+   my $path = File::Spec->catfile( $FindBin::Bin, '..', 'fixtures', 'micro-mixed-n200.pmat' );
+   if ( !-f $path ) {
+      require PMAT::Bench::Tiers;
+      require PMAT::Bench::Fixture;
+      my ($tier) = PMAT::Bench::Tiers::resolve_tiers('micro');
+      my $fixtures = File::Spec->catdir( $FindBin::Bin, '..', 'fixtures' );
+      ($path) = PMAT::Bench::Fixture->ensure( $tier, dir => $fixtures, count_svs => 1 );
+   }
 
    local $ENV{PMAT_BACKEND} = 'perl';
-   my $pmat = Devel::MAT->load($DUMPFILE);
+   local $ENV{PMAT_IDX}     = '0';
+   my $pmat = Devel::MAT->load($path);
    $pmat->load_tool('Sizes');
    my $df   = $pmat->dumpfile;
-   my @heap = $df->heap;
+   # Bounded sample of heap for top-K unit (full micro heap is fine but heavy)
+   my @heap = ( $df->heap )[ 0 .. 499 ];
+   @heap = grep { $_ } @heap;
    cmp_ok( scalar @heap, '>', 10, 'heap has SVs for topk' );
 
    my @top3 = $pkg->_select_topk( \@heap, 'size', 3 );
    is( scalar @top3, 3, 'top-K returns K items' )
       or diag "top3=", join( ",", map { $_ ? $_->addr : "undef" } @top3 );
 
-   # Scores non-increasing
    my @scores = map { $_->size } @top3;
    ok( $scores[0] >= $scores[1] && $scores[1] >= $scores[2], 'top-K sorted by size desc' );
 
-   # Membership equals sorting whole heap by size
    my @sorted = sort { $b->size <=> $a->size || $a->addr <=> $b->addr } @heap;
    is( $top3[0]->addr, $sorted[0]->addr, 'top1 addr matches full sort' );
    is( $top3[1]->addr, $sorted[1]->addr, 'top2 addr matches full sort' );

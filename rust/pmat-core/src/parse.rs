@@ -633,6 +633,14 @@ impl Dump {
                         ));
                     }
                     objects[id as usize].array_flags = flags;
+                    // Match Devel::MAT::SV::ARRAY::_outrefs (0.54):
+                    // AvREAL unset (flags 0x01 = not REAL / is_unreal) → weak elems;
+                    // AvREAL set → strong elems (contribute to SvREFCNT).
+                    let elem_strength = if (flags & 0x01) != 0 {
+                        Strength::Weak
+                    } else {
+                        Strength::Strong
+                    };
                     let mut elems = Vec::with_capacity(n);
                     for _ in 0..n {
                         let elem = c.ptr()?;
@@ -641,7 +649,7 @@ impl Dump {
                             pending.push(PendingEdge {
                                 from: id,
                                 to_addr: elem,
-                                strength: Strength::Strong,
+                                strength: elem_strength,
                             });
                         }
                     }
@@ -711,15 +719,50 @@ impl Dump {
                 }
                 7 => {
                     // CODE: ptrs + body of CONSTSV etc until type 0
-                    for &p in &type_ptrs {
+                    // Header: UINT LINE, U8 FLAGS, PTR OPROOT, U32 DEPTH, PTR NAME_HEK
+                    // FLAGS: 0x08 WEAKOUTSIDE, 0x10 CVGV_RC (see format.txt / SV::CODE)
+                    let code_flags = {
+                        let th = &type_header;
+                        let mut off = c.uint_len; // skip LINE
+                        if th.len() > off {
+                            th[off]
+                        } else {
+                            0
+                        }
+                    };
+                    let weak_outside = (code_flags & 0x08) != 0;
+                    let strong_gv = (code_flags & 0x10) != 0;
+                    // PTRs: STASH, GLOB, OUTSIDE, PADLIST, CONSTVAL — 0.54 strengths
+                    let ptr_strengths = [
+                        Strength::Weak,                                   // STASH
+                        if strong_gv { Strength::Strong } else { Strength::Weak }, // GLOB
+                        if weak_outside { Strength::Weak } else { Strength::Strong }, // OUTSIDE
+                        Strength::Strong,                                  // PADLIST
+                        Strength::Strong,                                  // CONSTVAL
+                    ];
+                    for (i, &p) in type_ptrs.iter().enumerate() {
                         if p != 0 {
+                            let strength = ptr_strengths.get(i).copied().unwrap_or(Strength::Strong);
                             pending.push(PendingEdge {
                                 from: id,
                                 to_addr: p,
-                                strength: Strength::Strong,
+                                strength,
                             });
                         }
                     }
+                    // ithreads: constants/gvs are indirect; else strong (0.54 _outrefs)
+                    let const_gv_strength = if ithreads {
+                        Strength::Indirect
+                    } else {
+                        Strength::Strong
+                    };
+                    // Padnames/pads: indirect if PADLIST present, else strong
+                    let have_padlist = type_ptrs.get(3).copied().unwrap_or(0) != 0;
+                    let pad_strength = if have_padlist {
+                        Strength::Indirect
+                    } else {
+                        Strength::Strong
+                    };
                     loop {
                         let bt = c.u8()?;
                         if bt == 0 {
@@ -733,7 +776,7 @@ impl Dump {
                                     pending.push(PendingEdge {
                                         from: id,
                                         to_addr: p,
-                                        strength: Strength::Strong,
+                                        strength: const_gv_strength,
                                     });
                                 }
                             }
@@ -747,7 +790,7 @@ impl Dump {
                                     pending.push(PendingEdge {
                                         from: id,
                                         to_addr: p,
-                                        strength: Strength::Strong,
+                                        strength: const_gv_strength,
                                     });
                                 }
                             }
@@ -793,7 +836,7 @@ impl Dump {
                                     pending.push(PendingEdge {
                                         from: id,
                                         to_addr: p,
-                                        strength: Strength::Strong,
+                                        strength: pad_strength,
                                     });
                                 }
                             }
@@ -805,7 +848,7 @@ impl Dump {
                                     pending.push(PendingEdge {
                                         from: id,
                                         to_addr: p,
-                                        strength: Strength::Strong,
+                                        strength: pad_strength,
                                     });
                                 }
                             }
@@ -1096,6 +1139,57 @@ impl Dump {
         let a = self.reverse_off[i] as usize;
         let b = self.reverse_off[i + 1] as usize;
         &self.reverse_edges[a..b]
+    }
+
+    /// Classic %seen owned_size for every heap ObjectId (not child-sum DP).
+    /// Exclusive children: strong CSR outrefs to non-immortal refcnt==1 targets.
+    /// Only `heap_count` real heap objects are included (not synthetic immortals).
+    pub fn owned_sizes(&self) -> Vec<u64> {
+        let n = self.heap_count as usize;
+        let mut kids: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for id in 0..n {
+            for e in self.outrefs(id as ObjectId) {
+                if e.strength != Strength::Strong {
+                    continue;
+                }
+                let t = e.target as usize;
+                if t >= n {
+                    continue;
+                }
+                let obj = &self.objects[t];
+                if obj.refcnt != 1 {
+                    continue;
+                }
+                // UNDEF/YES/NO type codes (immortal placeholders)
+                if matches!(obj.type_code, 13 | 14 | 15) {
+                    continue;
+                }
+                kids[id].push(e.target);
+            }
+        }
+        let mut owned = vec![0u64; n];
+        let mut seen = vec![0u32; n];
+        let mut gen: u32 = 0;
+        for start in 0..n {
+            gen = gen.wrapping_add(1);
+            if gen == 0 {
+                seen.fill(0);
+                gen = 1;
+            }
+            let mut total = 0u64;
+            let mut stack = vec![start as u32];
+            while let Some(id) = stack.pop() {
+                let i = id as usize;
+                if seen[i] == gen {
+                    continue;
+                }
+                seen[i] = gen;
+                total = total.saturating_add(self.objects[i].size);
+                stack.extend_from_slice(&kids[i]);
+            }
+            owned[start] = total;
+        }
+        owned
     }
 }
 
