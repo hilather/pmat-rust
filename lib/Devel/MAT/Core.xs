@@ -34,6 +34,12 @@ extern uint32_t pmat_refcnt_for_id(const pmat_dump *dump, uint32_t id);
 extern uint64_t pmat_size_for_id(const pmat_dump *dump, uint32_t id);
 extern uint64_t pmat_blessed_for_id(const pmat_dump *dump, uint32_t id);
 extern int pmat_owned_sizes(const pmat_dump *dump, uint64_t *out_sizes, size_t out_len);
+extern int pmat_owned_topk(const pmat_dump *dump, uint32_t k,
+    uint32_t *out_ids, uint64_t *out_addrs, uint64_t *out_scores, size_t *out_n);
+extern int pmat_owned_largest_tree(const pmat_dump *dump,
+    const uint32_t *counts, size_t n_counts,
+    uint32_t *out_ids, uint64_t *out_addrs, uint64_t *out_scores,
+    uint32_t *out_depths, int32_t *out_parents, size_t max_nodes, size_t *out_n);
 extern int pmat_outrefs_batch(const pmat_dump *dump, uint32_t id,
                               uint32_t *target_ids, uint8_t *strengths,
                               size_t max_edges, size_t *out_n);
@@ -464,6 +470,124 @@ owned_sizes(self)
       Safefree(sizes);
     }
     PUSHs(sv_2mortal(newRV_noinc((SV *)av)));
+
+void
+owned_topk(self, k)
+    SV *self
+    UV k
+  PREINIT:
+    pmat_handle *h;
+    uint32_t *ids = NULL;
+    uint64_t *addrs = NULL;
+    uint64_t *scores = NULL;
+    size_t got = 0;
+    size_t i;
+    UV kk;
+  PPCODE:
+    h = INT2PTR(pmat_handle *, SvIV((SV *)SvRV(self)));
+    kk = k;
+    if (kk == 0)
+      XSRETURN_EMPTY;
+    Newx(ids, kk, uint32_t);
+    Newx(addrs, kk, uint64_t);
+    Newx(scores, kk, uint64_t);
+    if (pmat_owned_topk(h->dump, (uint32_t)kk, ids, addrs, scores, &got) != 0) {
+      Safefree(ids);
+      Safefree(addrs);
+      Safefree(scores);
+      croak("pmat_owned_topk failed: %s", pmat_last_error());
+    }
+    EXTEND(SP, (IV)got);
+    for (i = 0; i < got; i++) {
+      AV *row = newAV();
+      av_push(row, newSVuv((UV)ids[i]));
+      av_push(row, newSVuv((UV)addrs[i]));
+      av_push(row, newSVuv((UV)scores[i]));
+      PUSHs(sv_2mortal(newRV_noinc((SV *)row)));
+    }
+    Safefree(ids);
+    Safefree(addrs);
+    Safefree(scores);
+
+void
+owned_largest_tree(self, counts_ref)
+    SV *self
+    SV *counts_ref
+  PREINIT:
+    pmat_handle *h;
+    AV *cav;
+    uint32_t *counts = NULL;
+    uint32_t *ids = NULL;
+    uint64_t *addrs = NULL;
+    uint64_t *scores = NULL;
+    uint32_t *depths = NULL;
+    int32_t *parents = NULL;
+    size_t n_counts = 0;
+    size_t max_nodes = 0;
+    size_t got = 0;
+    size_t i;
+    size_t prod;
+    SSize_t ai;
+    SSize_t alen;
+  PPCODE:
+    h = INT2PTR(pmat_handle *, SvIV((SV *)SvRV(self)));
+    if (!SvROK(counts_ref) || SvTYPE(SvRV(counts_ref)) != SVt_PVAV)
+      croak("owned_largest_tree: counts must be arrayref");
+    cav = (AV *)SvRV(counts_ref);
+    alen = av_len(cav) + 1;
+    if (alen <= 0)
+      XSRETURN_EMPTY;
+    n_counts = (size_t)alen;
+    Newx(counts, n_counts, uint32_t);
+    prod = 1;
+    max_nodes = 0;
+    for (ai = 0; ai < alen; ai++) {
+      SV **svp = av_fetch(cav, ai, 0);
+      UV c = svp && *svp ? SvUV(*svp) : 0;
+      counts[ai] = (uint32_t)c;
+      if (c == 0)
+        break;
+      if (prod > 100000 / (size_t)c)
+        prod = 100000;
+      else
+        prod *= (size_t)c;
+      max_nodes += prod;
+    }
+    if (max_nodes < 16)
+      max_nodes = 16;
+    if (max_nodes > 100000)
+      max_nodes = 100000;
+    Newx(ids, max_nodes, uint32_t);
+    Newx(addrs, max_nodes, uint64_t);
+    Newx(scores, max_nodes, uint64_t);
+    Newx(depths, max_nodes, uint32_t);
+    Newx(parents, max_nodes, int32_t);
+    if (pmat_owned_largest_tree(h->dump, counts, n_counts,
+          ids, addrs, scores, depths, parents, max_nodes, &got) != 0) {
+      Safefree(counts);
+      Safefree(ids);
+      Safefree(addrs);
+      Safefree(scores);
+      Safefree(depths);
+      Safefree(parents);
+      croak("pmat_owned_largest_tree failed: %s", pmat_last_error());
+    }
+    EXTEND(SP, (IV)got);
+    for (i = 0; i < got; i++) {
+      AV *row = newAV();
+      av_push(row, newSVuv((UV)ids[i]));
+      av_push(row, newSVuv((UV)addrs[i]));
+      av_push(row, newSVuv((UV)scores[i]));
+      av_push(row, newSVuv((UV)depths[i]));
+      av_push(row, newSViv((IV)parents[i]));
+      PUSHs(sv_2mortal(newRV_noinc((SV *)row)));
+    }
+    Safefree(counts);
+    Safefree(ids);
+    Safefree(addrs);
+    Safefree(scores);
+    Safefree(depths);
+    Safefree(parents);
 
 UV
 id_for_addr(self, addr)

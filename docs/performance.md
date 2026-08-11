@@ -185,8 +185,8 @@ Measured forced-rust, same fixtures (`small-mixed-n5000`, `medium-mixed-n25000`)
 | | |
 |--|--|
 | **Problem** | Full-heap tools re-walk proxies; structural/owned size and reachability do not use dense graph. |
-| **Shipped** | Rust `Dump::owned_sizes` + `pmat_owned_sizes` / Core `owned_sizes` with 0.54-aligned CSR strong exclusive kids; `largest --owned` uses dense precompute + top-K materialize only. Exact score parity on exclusive AV roots; micro top-K **overlap** (≥3/5) vs classic. |
-| **Residual** | Absolute owned scores / tail of top-K may drift where CSR still ≠ full 0.54 edges (regenerated micro dumps on EL8 can swap ranks 4–5); nested owned display tree still expensive (`PMAT_OWNED_FULL`); structural size / reachability / find native still open. |
+| **Shipped** | Parallel `Dump::owned_sizes`; `pmat_owned_topk` / `pmat_owned_largest_tree`; Sizes nested `largest --owned` via CSR exclusive descendants without full heap materialize. Exact score parity on exclusive AV roots; micro top-K **overlap** (≥3/5) vs classic. |
+| **Residual** | Absolute owned scores / tail of top-K may drift where CSR still ≠ full 0.54 edges; nested display is CSR-native (not classic `owned_set` oracle); structural size / reachability / find native still open. |
 | **Accept** | Structural sizes and reachability classes match 0.54 on fixture set |
 
 ### OPT-05 — Identify without full heap  **[DONE — strong path]**
@@ -206,9 +206,20 @@ Measured forced-rust, same fixtures (`small-mixed-n5000`, `medium-mixed-n25000`)
 | **identify** (strong) | full heap + ~seconds | **~0.00 s** | **~0.02 s** | walk set only (~1.5k) |
 | **largest --owned** | **~72 s** (v0.57 tree) / **843 s** (v0.56) | **~0.9 s** | **~0.14 s** | top-K only (~few proxies) |
 
-**Native owned ranking residual:** `Dump::owned_sizes` uses dense CSR strong exclusive children after 0.54-aligned strength fixes (ARRAY AvREAL, CODE stash/glob/outside/pads). Exact native==classic owned score is asserted on a **controlled exclusive AV root** (`t/100-oom-hotpath.t`). On mixed micro fixtures (gitignored, regenerated in CI), require classic top-1 ∈ native top-5 and ≥3/5 top-K address overlap — ranks 4–5 can still swap when CSR under-counts STASH exclusive kids. Display uses native scores. Deep nested owned tree still requires `PMAT_OWNED_FULL=1` (classic full materialize).
+### After native top-K FFI + parallel scores + nested CSR tree (2026-08-11)
 
-Residual: `largest --owned` default shows **top-level** list under rust native path. Global classic inrefs still full-heap when loaded without lazy request.
+| Path | Before (medium) | After (medium) | Notes |
+|------|-----------------|----------------|-------|
+| **`owned_sizes` (serial `PMAT_OWNED_THREADS=1`)** | ~0.36 s | **~0.36 s** | same algorithm |
+| **`owned_sizes` (parallel default)** | ~0.36 s | **~0.25–0.27 s** | ~1.3–1.4× on 12-core host; 0 mismatches vs serial |
+| **Legacy ranking glue** (sizes + addr×N + Perl top-K) | **~0.67 s** | — | retired for `largest --owned` |
+| **`pmat_owned_topk(5)`** | — | **~0.27 s** | scores+rank in core; no full Perl addr table |
+| **`largest --owned 5 3 2`** (nested) | **~60–72 s** (classic tree) | **~0.68–0.80 s** | mat +12 proxies (1481→1493 / 666k) |
+| **`largest --owned 5`** (defaults still nest 3,2) | same cliff | **~0.70 s** | of which via CSR exclusive descendants |
+
+**Shipped path:** `pmat_owned_largest_tree` (parallel `owned_sizes` + multi-level exclusive-descendant top-K). Sizes materializes **only printed nodes**. `PMAT_OWNED_FULL=1` restores classic full-heap + `owned_set` tree. `PMAT_OWNED_THREADS=N` forces worker count (1 = serial).
+
+**Native owned ranking residual:** `Dump::owned_sizes` uses dense CSR strong exclusive children after 0.54-aligned strength fixes (ARRAY AvREAL, CODE stash/glob/outside/pads). Exact native==classic owned score is asserted on a **controlled exclusive AV root** (`t/100-oom-hotpath.t`). On mixed micro fixtures (gitignored, regenerated in CI), require classic top-1 ∈ native top-5 and ≥3/5 top-K address overlap — ranks 4–5 can still swap when CSR under-counts STASH exclusive kids. Nested “of which” uses the same CSR exclusive digraph (multi-parent diamonds can list overlapping large kids); not a full 0.54 `owned_set` byte-match when residual edges remain.
 
 ### OPT-06 — Cheap / stub proxies for graph-only walks  **[P2]**
 

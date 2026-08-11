@@ -397,6 +397,114 @@ pub extern "C" fn pmat_owned_sizes(
     })
 }
 
+/// Top-K by owned size without transferring the full score array.
+/// Writes up to `k` triples into out_ids/out_addrs/out_scores (score desc, addr asc).
+/// `*out_n` = number written. Arrays must hold at least `k` entries when k>0.
+#[no_mangle]
+pub extern "C" fn pmat_owned_topk(
+    dump: *const Dump,
+    k: u32,
+    out_ids: *mut u32,
+    out_addrs: *mut u64,
+    out_scores: *mut u64,
+    out_n: *mut usize,
+) -> i32 {
+    catch_code(|| {
+        let d = match get(dump) {
+            Ok(d) => d,
+            Err(c) => return c,
+        };
+        if out_n.is_null() {
+            set_err("pmat_owned_topk: null out_n");
+            return -1;
+        }
+        let kk = k as usize;
+        if kk == 0 {
+            unsafe { *out_n = 0 };
+            return 0;
+        }
+        if out_ids.is_null() || out_addrs.is_null() || out_scores.is_null() {
+            set_err("pmat_owned_topk: null output buffer");
+            return -1;
+        }
+        let top = d.owned_topk(kk);
+        let n = top.len();
+        let ids = unsafe { slice::from_raw_parts_mut(out_ids, kk) };
+        let addrs = unsafe { slice::from_raw_parts_mut(out_addrs, kk) };
+        let scores = unsafe { slice::from_raw_parts_mut(out_scores, kk) };
+        for (i, (id, addr, score)) in top.iter().enumerate() {
+            ids[i] = *id;
+            addrs[i] = *addr;
+            scores[i] = *score;
+        }
+        unsafe { *out_n = n };
+        0
+    })
+}
+
+/// Multi-level largest-owned tree (counts e.g. 5,3,2). Writes up to max_nodes
+/// flat rows: id, addr, score, depth, parent_index (-1 root). *out_n = rows written.
+#[no_mangle]
+pub extern "C" fn pmat_owned_largest_tree(
+    dump: *const Dump,
+    counts: *const u32,
+    n_counts: usize,
+    out_ids: *mut u32,
+    out_addrs: *mut u64,
+    out_scores: *mut u64,
+    out_depths: *mut u32,
+    out_parents: *mut i32,
+    max_nodes: usize,
+    out_n: *mut usize,
+) -> i32 {
+    catch_code(|| {
+        let d = match get(dump) {
+            Ok(d) => d,
+            Err(c) => return c,
+        };
+        if out_n.is_null() {
+            set_err("pmat_owned_largest_tree: null out_n");
+            return -1;
+        }
+        if n_counts == 0 {
+            unsafe { *out_n = 0 };
+            return 0;
+        }
+        if counts.is_null() {
+            set_err("pmat_owned_largest_tree: null counts");
+            return -1;
+        }
+        if max_nodes == 0
+            || out_ids.is_null()
+            || out_addrs.is_null()
+            || out_scores.is_null()
+            || out_depths.is_null()
+            || out_parents.is_null()
+        {
+            set_err("pmat_owned_largest_tree: null/empty output");
+            return -1;
+        }
+        let cnt_slice = unsafe { slice::from_raw_parts(counts, n_counts) };
+        let cnts: Vec<usize> = cnt_slice.iter().map(|&c| c as usize).collect();
+        let tree = d.owned_largest_tree(&cnts);
+        let n = tree.len().min(max_nodes);
+        let ids = unsafe { slice::from_raw_parts_mut(out_ids, max_nodes) };
+        let addrs = unsafe { slice::from_raw_parts_mut(out_addrs, max_nodes) };
+        let scores = unsafe { slice::from_raw_parts_mut(out_scores, max_nodes) };
+        let depths = unsafe { slice::from_raw_parts_mut(out_depths, max_nodes) };
+        let parents = unsafe { slice::from_raw_parts_mut(out_parents, max_nodes) };
+        for (i, (id, addr, score, depth, parent)) in tree.iter().take(n).enumerate() {
+            ids[i] = *id;
+            addrs[i] = *addr;
+            scores[i] = *score;
+            depths[i] = *depth;
+            parents[i] = *parent;
+        }
+        unsafe { *out_n = n };
+        0
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn pmat_forward_edge_count(dump: *const Dump) -> u64 {
     get(dump)

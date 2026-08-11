@@ -1141,10 +1141,9 @@ impl Dump {
         &self.reverse_edges[a..b]
     }
 
-    /// Classic %seen owned_size for every heap ObjectId (not child-sum DP).
-    /// Exclusive children: strong CSR outrefs to non-immortal refcnt==1 targets.
-    /// Only `heap_count` real heap objects are included (not synthetic immortals).
-    pub fn owned_sizes(&self) -> Vec<u64> {
+    /// Strong exclusive children (CSR): non-immortal refcnt==1 strong outrefs.
+    /// Same filter as classic `_owned_children` / historic owned_set walk.
+    pub fn exclusive_kids(&self) -> Vec<Vec<u32>> {
         let n = self.heap_count as usize;
         let mut kids: Vec<Vec<u32>> = vec![Vec::new(); n];
         for id in 0..n {
@@ -1167,17 +1166,103 @@ impl Dump {
                 kids[id].push(e.target);
             }
         }
+        kids
+    }
+
+    /// Worker count for parallel owned scoring.
+    /// `PMAT_OWNED_THREADS=N` forces N (min 1); unset → available_parallelism.
+    pub fn owned_thread_count() -> usize {
+        if let Ok(v) = std::env::var("PMAT_OWNED_THREADS") {
+            if let Ok(n) = v.parse::<usize>() {
+                return n.max(1);
+            }
+        }
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .max(1)
+    }
+
+    /// Classic %seen owned_size for every heap ObjectId (not child-sum DP).
+    /// Exclusive children: strong CSR outrefs to non-immortal refcnt==1 targets.
+    /// Only `heap_count` real heap objects are included (not synthetic immortals).
+    /// Independent root walks are parallelized across CPU cores (per-worker seen).
+    pub fn owned_sizes(&self) -> Vec<u64> {
+        let kids = self.exclusive_kids();
+        self.owned_sizes_with_kids(&kids)
+    }
+
+    pub fn owned_sizes_with_kids(&self, kids: &[Vec<u32>]) -> Vec<u64> {
+        let n = self.heap_count as usize;
+        if n == 0 {
+            return Vec::new();
+        }
+        let threads = Self::owned_thread_count().min(n);
+        if threads <= 1 {
+            return self.owned_sizes_range(kids, 0, n);
+        }
+
+        let mut owned = vec![0u64; n];
+        let chunk = (n + threads - 1) / threads;
+        // Split into non-overlapping mutable subslices (no aliasing UB).
+        let objects = &self.objects;
+        std::thread::scope(|scope| {
+            let mut rest: &mut [u64] = &mut owned[..];
+            let mut base = 0usize;
+            for t in 0..threads {
+                let start = t * chunk;
+                let end = ((t + 1) * chunk).min(n);
+                if start >= end {
+                    continue;
+                }
+                debug_assert_eq!(base, start);
+                let take = end - start;
+                let (mine, tail) = rest.split_at_mut(take);
+                rest = tail;
+                base = end;
+                let kids = kids;
+                scope.spawn(move || {
+                    let mut seen = vec![0u32; n];
+                    let mut gen: u32 = 0;
+                    for (local_i, out_slot) in mine.iter_mut().enumerate() {
+                        let s = start + local_i;
+                        gen = gen.wrapping_add(1);
+                        if gen == 0 {
+                            seen.fill(0);
+                            gen = 1;
+                        }
+                        let mut total = 0u64;
+                        let mut stack = vec![s as u32];
+                        while let Some(id) = stack.pop() {
+                            let i = id as usize;
+                            if seen[i] == gen {
+                                continue;
+                            }
+                            seen[i] = gen;
+                            total = total.saturating_add(objects[i].size);
+                            stack.extend_from_slice(&kids[i]);
+                        }
+                        *out_slot = total;
+                    }
+                });
+            }
+        });
+        owned
+    }
+
+    fn owned_sizes_range(&self, kids: &[Vec<u32>], start: usize, end: usize) -> Vec<u64> {
+        let n = self.heap_count as usize;
         let mut owned = vec![0u64; n];
         let mut seen = vec![0u32; n];
         let mut gen: u32 = 0;
-        for start in 0..n {
+        for s in start..end {
             gen = gen.wrapping_add(1);
             if gen == 0 {
                 seen.fill(0);
                 gen = 1;
             }
             let mut total = 0u64;
-            let mut stack = vec![start as u32];
+            let mut stack = vec![s as u32];
             while let Some(id) = stack.pop() {
                 let i = id as usize;
                 if seen[i] == gen {
@@ -1187,9 +1272,137 @@ impl Dump {
                 total = total.saturating_add(self.objects[i].size);
                 stack.extend_from_slice(&kids[i]);
             }
-            owned[start] = total;
+            owned[s] = total;
         }
         owned
+    }
+
+    /// Top-K roots by owned size (score desc, addr asc). Returns (id, addr, score).
+    pub fn owned_topk(&self, k: usize) -> Vec<(u32, u64, u64)> {
+        if k == 0 {
+            return Vec::new();
+        }
+        let kids = self.exclusive_kids();
+        let owned = self.owned_sizes_with_kids(&kids);
+        self.topk_from_owned(&owned, k)
+    }
+
+    fn topk_from_owned(&self, owned: &[u64], k: usize) -> Vec<(u32, u64, u64)> {
+        let n = owned.len().min(self.heap_count as usize);
+        if k == 0 || n == 0 {
+            return Vec::new();
+        }
+        // Min-heap of size k via sorted Vec (k is tiny, e.g. 5).
+        let mut best: Vec<(u64, u64, u32)> = Vec::with_capacity(k); // (score, addr, id)
+        for id in 0..n {
+            let score = owned[id];
+            let addr = self.objects[id].addr;
+            if best.len() < k {
+                best.push((score, addr, id as u32));
+                best.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            } else if score > best[k - 1].0
+                || (score == best[k - 1].0 && addr < best[k - 1].1)
+            {
+                best.pop();
+                best.push((score, addr, id as u32));
+                best.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            }
+        }
+        best.into_iter()
+            .map(|(score, addr, id)| (id, addr, score))
+            .collect()
+    }
+
+    /// Among exclusive descendants of `root` (not including root), top-K by owned score.
+    pub fn owned_descendants_topk(
+        &self,
+        root: ObjectId,
+        k: usize,
+        owned: &[u64],
+        kids: &[Vec<u32>],
+    ) -> Vec<(u32, u64, u64)> {
+        let n = self.heap_count as usize;
+        let r = root as usize;
+        if k == 0 || r >= n {
+            return Vec::new();
+        }
+        // Collect exclusive set (incl. root), then rank descendants only.
+        let mut seen = vec![false; n];
+        let mut stack = vec![root];
+        let mut members: Vec<u32> = Vec::new();
+        while let Some(id) = stack.pop() {
+            let i = id as usize;
+            if i >= n || seen[i] {
+                continue;
+            }
+            seen[i] = true;
+            members.push(id);
+            stack.extend_from_slice(&kids[i]);
+        }
+        let mut best: Vec<(u64, u64, u32)> = Vec::with_capacity(k);
+        for &id in &members {
+            if id == root {
+                continue;
+            }
+            let i = id as usize;
+            let score = owned.get(i).copied().unwrap_or(0);
+            let addr = self.objects[i].addr;
+            if best.len() < k {
+                best.push((score, addr, id));
+                best.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            } else if score > best[k - 1].0
+                || (score == best[k - 1].0 && addr < best[k - 1].1)
+            {
+                best.pop();
+                best.push((score, addr, id));
+                best.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            }
+        }
+        best.into_iter()
+            .map(|(score, addr, id)| (id, addr, score))
+            .collect()
+    }
+
+    /// Multi-level largest-owned display tree without materializing the heap.
+    /// `counts` is e.g. [5, 3, 2] for roots then nested "of which" levels.
+    /// Each node: (id, addr, score, depth, parent_index_in_out_or_-1).
+    pub fn owned_largest_tree(&self, counts: &[usize]) -> Vec<(u32, u64, u64, u32, i32)> {
+        if counts.is_empty() || counts[0] == 0 {
+            return Vec::new();
+        }
+        let kids = self.exclusive_kids();
+        let owned = self.owned_sizes_with_kids(&kids);
+        let mut out: Vec<(u32, u64, u64, u32, i32)> = Vec::new();
+
+        // Level 0: global top-K
+        let roots = self.topk_from_owned(&owned, counts[0]);
+        for (id, addr, score) in roots {
+            out.push((id, addr, score, 0, -1));
+        }
+
+        // Deeper levels: for each node at depth d-1, expand exclusive descendants
+        for depth in 1..counts.len() {
+            let k = counts[depth];
+            if k == 0 {
+                break;
+            }
+            let parent_depth = (depth - 1) as u32;
+            // Snapshot parent indices at this depth (out grows as we append).
+            let parents: Vec<usize> = out
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| n.3 == parent_depth)
+                .map(|(i, _)| i)
+                .collect();
+            for pi in parents {
+                let root_id = out[pi].0;
+                let kids_top = self.owned_descendants_topk(root_id, k, &owned, &kids);
+                for (id, addr, score) in kids_top {
+                    out.push((id, addr, score, depth as u32, pi as i32));
+                }
+            }
+        }
+        out
     }
 }
 

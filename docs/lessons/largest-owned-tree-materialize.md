@@ -1,44 +1,37 @@
 # largest --owned: deep owned tree forces materialize
 
-- **Status:** residual (default native path is top-level only)
+- **Status:** mitigated (native nested tree shipped; classic path residual)
 - **Area:** OPT-10 / `Tool::Sizes` · `list_largest_svs` nested `owned_set`
-- **Date:** 2026-08-11
+- **Date:** 2026-08-11 (updated same day: CSR nested tree)
 
 ## One-liner
 
-Even after dense owned precompute + top-K root selection, expanding the
-**nested** `owned_set` display tree for large STASHes materializes most of the
-heap and re-introduces multi-minute pauses.
+Classic nested `owned_set` on large STASHes materializes most of the heap
+(~60–70 s medium). **Shipped fix:** expand nested “of which” from dense CSR
+exclusive descendants in Rust (`pmat_owned_largest_tree`); materialize only
+printed nodes (~0.7 s medium, +~12 proxies).
 
-## Symptom / measurement
+## Symptom / measurement (historical)
 
 - Native `pmat_owned_sizes` on small: **~0.03 s**.
-- With nested tree counts 5/3/2: medium still **~60–70 s**, mat ≈ full heap.
-- Top-level only (`list_largest_svs` with single K): medium **~0.9 s**, mat ≈ load roots.
+- With classic nested tree counts 5/3/2: medium **~60–70 s**, mat ≈ full heap.
+- Top-level only: medium **~0.9 s**.
 
-## What was tried
+## Shipped mitigation (after)
 
-- Seed `tool_sizes_owned` from native scores then run full tree walk.
-- Candidate re-rank with classic `owned_size` on top-64 (still walked huge exclusive sets).
+- Parallel `owned_sizes` (`PMAT_OWNED_THREADS`); `pmat_owned_topk` /
+  `pmat_owned_largest_tree` FFI; Sizes uses tree path for default
+  `largest --owned` (including 5 3 2).
+- Medium nested: **~0.68 s**, mat 1481→1493 / 666k; “of which” present.
+- `PMAT_OWNED_FULL=1` restores classic full-heap `owned_set` tree.
 
-## Why it is expensive
+## What was tried (and rejected as default)
 
-Top owned SVs are often defstash / large packages. `owned_set` for those nodes
-is a huge fraction of the heap; each exclusive child is materialized via
-`outrefs_strong`.
+- Seed `tool_sizes_owned` from native scores then full classic tree walk.
+- Candidate re-rank with classic `owned_size` on top-64 (huge STASH walks).
 
-## Correct default under rust native path
+## Residual
 
-- Precompute owned scores in Rust (`Dump::owned_sizes` with 0.54-aligned CSR
-  strong exclusive kids); materialize only top-K roots; print **top-level**
-  list (no nested 3/2 tree).
-- Exact native==classic score on controlled exclusive roots; micro top-K needs
-  useful overlap (≥3/5), not exact set — CSR residual can swap tail ranks on
-  regenerated mixed dumps (CI EL8). See `t/100-oom-hotpath.t`.
-- `PMAT_OWNED_FULL=1` restores classic full-heap path (deep tree + full
-  materialize).
-
-## Do not retry until
-
-- Stub proxies (OPT-06) or native owned_set expansion without full SV payloads,
-  **or** an explicit UX for “expand this node” without pre-expanding all trees.
+- Nested ranking uses CSR exclusive digraph (multi-parent diamonds; not
+  always identical to classic `owned_set` membership when edges residual).
+- Exact top-5 set on regenerated micro dumps still may swap tail ranks.

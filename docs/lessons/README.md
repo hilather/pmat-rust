@@ -56,7 +56,7 @@ scratch during investigation, not here.
 | 2026-08-07 | OPT-03 pure-CSR inrefs (strengths + scalar count) | failed / residual | [opt-03-csr-inrefs](opt-03-csr-inrefs.md) |
 | 2026-08-07 | Owned-size child-sum DP unsafe (multi-parent exclusive digraph) | failed approach | [owned-size-child-sum-dp](owned-size-child-sum-dp.md) |
 | 2026-08-07 | CODE `"the glob"` / protosub edges depend on Perl hash perturbation | semantics | [perl-hash-perturb-glob-edges](perl-hash-perturb-glob-edges.md) |
-| 2026-08-11 | largest --owned deep tree forces near-full materialize | residual | [largest-owned-tree-materialize](largest-owned-tree-materialize.md) |
+| 2026-08-11 | largest --owned deep tree forces near-full materialize | mitigated (native CSR tree) | [largest-owned-tree-materialize](largest-owned-tree-materialize.md) |
 
 ---
 

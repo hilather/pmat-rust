@@ -243,6 +243,86 @@ sub _classic_owned_sum {
    like( $src, qr/_select_topk/, 'Sizes.pm defines _select_topk' );
    like( $src, qr/_precompute_owned_sizes/, 'Sizes.pm has SCC owned precompute' );
    like( $src, qr/_owned_children/, 'Sizes.pm has exclusive-child helper' );
+   like( $src, qr/_list_native_owned_tree/, 'Sizes has native nested owned tree' );
+}
+
+# --- Rust native top-K FFI + nested tree sparse materialize --------------------
+SKIP: {
+   require Devel::MAT::Backend;
+   skip 'rust unavailable', 10 unless Devel::MAT::Backend->rust_available;
+
+   my $path = File::Spec->catfile( $FindBin::Bin, '..', 'fixtures', 'micro-mixed-n200.pmat' );
+   if ( !-f $path ) {
+      require PMAT::Bench::Tiers;
+      require PMAT::Bench::Fixture;
+      my ($tier) = PMAT::Bench::Tiers::resolve_tiers('micro');
+      my $fixtures = File::Spec->catdir( $FindBin::Bin, '..', 'fixtures' );
+      ($path) = PMAT::Bench::Fixture->ensure( $tier, dir => $fixtures, count_svs => 1 );
+   }
+
+   local $ENV{PMAT_BACKEND} = 'rust';
+   local $ENV{PMAT_IDX}     = '0';
+   delete local $ENV{PMAT_OWNED_FULL};
+
+   my $pmat = Devel::MAT->load($path);
+   $pmat->load_tool('Sizes');
+   my $df   = $pmat->dumpfile;
+   my $core = $df->rust_core;
+   ok( $core->can('owned_topk'), 'Core exposes owned_topk' );
+   ok( $core->can('owned_largest_tree'), 'Core exposes owned_largest_tree' );
+
+   my @top = $core->owned_topk(5);
+   is( scalar @top, 5, 'owned_topk returns 5 rows' );
+   ok( $top[0][2] >= $top[-1][2], 'owned_topk scores non-increasing' );
+
+   # Parallel scores must match serial (same %seen semantics).
+   {
+      local $ENV{PMAT_OWNED_THREADS} = '1';
+      my $serial = $core->owned_sizes;
+      delete local $ENV{PMAT_OWNED_THREADS};
+      my $par = $core->owned_sizes;
+      my $bad = 0;
+      for my $i ( 0 .. $#$serial ) {
+         $bad++ if ( $serial->[$i] // 0 ) != ( $par->[$i] // 0 );
+      }
+      is( $bad, 0, 'owned_sizes parallel == serial (PMAT_OWNED_THREADS=1)' );
+   }
+
+   # Tree shape: roots depth 0 parent -1; children point at valid parents.
+   {
+      my @tree = $core->owned_largest_tree( [ 3, 2 ] );
+      cmp_ok( scalar @tree, '>', 0, 'owned_largest_tree non-empty' );
+      my $shape_ok = 1;
+      for my $i ( 0 .. $#tree ) {
+         my ( $id, $addr, $score, $depth, $parent ) = @{ $tree[$i] };
+         if ( $depth == 0 ) {
+            $shape_ok = 0 if defined $parent && $parent >= 0;
+         }
+         else {
+            $shape_ok = 0
+               unless defined $parent && $parent >= 0 && $parent < $i
+               && $tree[$parent][3] == $depth - 1;
+         }
+      }
+      ok( $shape_ok, 'owned_largest_tree parent/depth shape valid' );
+   }
+
+   my $heap_n = $core->heap_count;
+   my $mat0   = $df->rust_materialized_count;
+   require Devel::MAT::Cmd::Terminal;
+   require Commandable::Invocation;
+   open my $out, '>', \( my $buf );
+   my $old = select $out;
+   $pmat->run_command(
+      Commandable::Invocation->new('largest --owned 3 2 1'),
+      progress => sub { },
+   );
+   select $old;
+   like( $buf, qr/of which/i, 'nested command prints of which' );
+   cmp_ok( $df->rust_materialized_count, '<', $heap_n * 0.05,
+      'nested owned mat ≪ 5% heap (t/98)' );
+   cmp_ok( $df->rust_materialized_count - $mat0, '<', 200,
+      'nested owned adds few proxies (t/98)' );
 }
 
 done_testing;

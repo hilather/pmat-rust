@@ -91,9 +91,29 @@ uint64_t pmat_reverse_edge_count(const pmat_dump *dump);
 /*
  * Classic owned_size (%%seen walk over strong exclusive children) for every
  * heap ObjectId. out_sizes must have room for pmat_heap_count entries.
- * Returns 0 on success.
+ * Returns 0 on success. Scoring walks are parallelized (PMAT_OWNED_THREADS).
  */
 int pmat_owned_sizes(const pmat_dump *dump, uint64_t *out_sizes, size_t out_len);
+
+/*
+ * Top-K by owned size (score desc, addr asc). Fills out_ids/out_addrs/out_scores
+ * with up to k entries; *out_n written count. Avoids full score array to Perl.
+ */
+int pmat_owned_topk(const pmat_dump *dump, uint32_t k,
+                    uint32_t *out_ids, uint64_t *out_addrs, uint64_t *out_scores,
+                    size_t *out_n);
+
+/*
+ * Multi-level largest-owned tree for counts[0..n_counts) (e.g. 5,3,2).
+ * Flat rows: id, addr, score, depth, parent_index (-1 for roots).
+ * *out_n = rows written (capped by max_nodes).
+ */
+int pmat_owned_largest_tree(const pmat_dump *dump,
+                            const uint32_t *counts, size_t n_counts,
+                            uint32_t *out_ids, uint64_t *out_addrs,
+                            uint64_t *out_scores, uint32_t *out_depths,
+                            int32_t *out_parents, size_t max_nodes,
+                            size_t *out_n);
 
 /* Last error message (thread-local / static buffer). Valid until next call. */
 const char *pmat_last_error(void);

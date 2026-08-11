@@ -105,7 +105,7 @@ SKIP: {
 
 # ---- largest --owned does not force full heap complete under rust ----
 SKIP: {
-   skip 'rust required', 4 unless $have_rust;
+   skip 'rust required', 6 unless $have_rust;
    local $ENV{PMAT_BACKEND} = 'rust';
    local $ENV{PMAT_IDX}     = '0';
    delete local $ENV{PMAT_OWNED_FULL};
@@ -124,21 +124,29 @@ SKIP: {
    select $old;
 
    like( $buf, qr/consumes:|KiB|bytes|at 0x/i, 'largest --owned produces output' );
+   like( $buf, qr/of which/i,
+      'nested largest --owned expands of which without PMAT_OWNED_FULL' );
    ok( !$df->rust_heap_complete, 'heap not complete after largest --owned' );
-   cmp_ok( $df->rust_materialized_count, '<', $heap_n * 0.5,
-      'largest --owned materialize well below full heap' )
+   # Nested tree materializes only printed nodes (≪ half heap; typically few dozen).
+   cmp_ok( $df->rust_materialized_count, '<', $heap_n * 0.05,
+      'nested largest --owned materialize ≪ 5% heap' )
       or diag( sprintf 'mat=%d heap=%d (was %d at load)',
          $df->rust_materialized_count, $heap_n, $mat0 );
+   cmp_ok( $df->rust_materialized_count - $mat0, '<', 200,
+      'nested owned tree adds fewer than 200 proxies' )
+      or diag( sprintf 'mat=%d mat0=%d', $df->rust_materialized_count, $mat0 );
 }
 
-# Static: Sizes has native owned path; Inrefs has lazy ensure
+# Static: Sizes has native owned top-K / tree path (no full addr×N ranking)
 {
    open my $fh, '<', File::Spec->catfile( $FindBin::Bin, '..', 'lib', 'Devel', 'MAT', 'Tool', 'Sizes.pm' )
       or die $!;
    local $/;
    my $src = <$fh>;
-   like( $src, qr/_native_owned_by_id/, 'Sizes defines native owned precompute' );
-   like( $src, qr/_native_owned_topk_ids/, 'Sizes defines native top-K ids' );
+   like( $src, qr/_native_owned_topk\b/, 'Sizes defines native owned_topk helper' );
+   like( $src, qr/_list_native_owned_tree/, 'Sizes defines native owned tree list' );
+   like( $src, qr/owned_largest_tree|owned_topk/,
+      'Sizes uses Core owned_topk / owned_largest_tree' );
 }
 
 # ---- Native owned ranking: exact on controlled exclusive tree; robust on micro ----
